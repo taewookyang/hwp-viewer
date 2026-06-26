@@ -54,7 +54,6 @@ const MIN_ZOOM = 0.75;
 const MAX_ZOOM = 2.5;
 const ZOOM_STEP = 0.25;
 let currentFile = null;
-let pageSearchIndex = [];
 let searchResults = [];
 let searchResultIndex = -1;
 let lastSearchQuery = '';
@@ -118,7 +117,6 @@ function cleanupDocument() {
   }
   doc = null;
   currentFile = null;
-  pageSearchIndex = [];
 }
 
 function formatFileSize(size) {
@@ -167,7 +165,6 @@ function resetZoom() {
 }
 
 function resetSearchState({ keepInput = false } = {}) {
-  pageSearchIndex = [];
   searchResults = [];
   searchResultIndex = -1;
   lastSearchQuery = '';
@@ -194,59 +191,102 @@ function updateSearchUi() {
     return;
   }
   const current = searchResults[searchResultIndex] ?? searchResults[0];
-  els.searchStatus.textContent = `${searchResultIndex + 1}/${searchResults.length} · ${current.pageIndex + 1}페이지`;
+  const pageLabel = Number.isFinite(current.pageIndex) ? `${current.pageIndex + 1}페이지` : '페이지 미상';
+  els.searchStatus.textContent = `${searchResultIndex + 1}/${searchResults.length} · ${pageLabel}`;
 }
 
-function extractTextFragments(value, out = []) {
-  if (value == null) return out;
-  if (Array.isArray(value)) {
-    for (const item of value) extractTextFragments(item, out);
-    return out;
+function tryParseJson(value) {
+  if (typeof value !== 'string') return value;
+  try {
+    return JSON.parse(value);
+  } catch {
+    return value;
   }
-  if (typeof value === 'object') {
-    if (typeof value.text === 'string' && value.text.trim()) out.push(value.text);
-    for (const [key, child] of Object.entries(value)) {
-      if (key === 'text') continue;
-      extractTextFragments(child, out);
+}
+
+function toInt(value) {
+  const num = Number(value);
+  return Number.isFinite(num) ? Math.trunc(num) : null;
+}
+
+function pickInt(source, keys) {
+  if (!source || typeof source !== 'object') return null;
+  for (const key of keys) {
+    const value = toInt(source[key]);
+    if (value != null) return value;
+  }
+  return null;
+}
+
+function normalizePageIndex(value) {
+  const num = toInt(value);
+  if (num == null) return null;
+  if (num >= 1 && num <= pageCount) return num - 1;
+  if (num >= 0 && num < pageCount) return num;
+  return null;
+}
+
+function resolvePageIndexFromPosition(sectionIndex, paragraphIndex) {
+  if (!doc || sectionIndex == null || paragraphIndex == null) return null;
+  try {
+    const raw = doc.getPageOfPosition(sectionIndex, paragraphIndex);
+    const parsed = tryParseJson(raw);
+    if (typeof parsed === 'number' || typeof parsed === 'string') {
+      return normalizePageIndex(parsed);
     }
+    return normalizePageIndex(
+      parsed?.pageIndex ?? parsed?.page ?? parsed?.pageNum ?? parsed?.globalPage ?? parsed?.global_page,
+    );
+  } catch (error) {
+    console.warn('검색 결과 페이지 매핑 실패', error);
+    return null;
   }
-  return out;
 }
 
-function buildSearchIndex() {
-  if (!doc || pageCount < 1) return [];
-  if (pageSearchIndex.length === pageCount) return pageSearchIndex;
-  const built = [];
-  for (let pageIndex = 0; pageIndex < pageCount; pageIndex += 1) {
-    try {
-      const raw = doc.getPageTextLayout(pageIndex);
-      const layout = JSON.parse(raw);
-      const text = extractTextFragments(layout).join(' ').replace(/\s+/g, ' ').trim();
-      built.push({ pageIndex, text });
-    } catch (error) {
-      console.warn('페이지 텍스트 추출 실패', pageIndex, error);
-      built.push({ pageIndex, text: '' });
-    }
-  }
-  pageSearchIndex = built;
-  return built;
+function normalizeSearchMatch(match, fallbackIndex = 0) {
+  if (!match || typeof match !== 'object') return null;
+  const sectionIndex = pickInt(match, ['sectionIndex', 'section', 'section_idx', 'sec', 'from_sec']);
+  const paragraphIndex = pickInt(match, ['paragraphIndex', 'paragraph', 'paraIndex', 'para_idx', 'para', 'from_para']);
+  const charOffset = pickInt(match, ['charOffset', 'char_offset', 'char', 'from_char', 'startCharOffset', 'start_char_offset']);
+  const endCharOffset = pickInt(match, ['endCharOffset', 'end_char_offset', 'to_char', 'matchEnd', 'match_end']);
+  const count = pickInt(match, ['count', 'matchCount', 'match_count']) ?? 1;
+  const pageIndex = normalizePageIndex(
+    match.pageIndex ?? match.page ?? match.page_num ?? match.pageNum ?? match.globalPage ?? match.global_page,
+  ) ?? resolvePageIndexFromPosition(sectionIndex, paragraphIndex);
+  return {
+    key: String(match.id ?? match.key ?? `${sectionIndex ?? 'x'}-${paragraphIndex ?? 'x'}-${charOffset ?? fallbackIndex}`),
+    pageIndex,
+    sectionIndex,
+    paragraphIndex,
+    charOffset,
+    endCharOffset,
+    count,
+    raw: match,
+  };
 }
 
-function countOccurrences(text, query) {
-  if (!text || !query) return 0;
-  let count = 0;
-  let from = 0;
-  while (true) {
-    const idx = text.indexOf(query, from);
-    if (idx === -1) break;
-    count += 1;
-    from = idx + query.length;
+function searchViaEngine(rawQuery) {
+  const raw = doc.searchAllText(rawQuery, false, true);
+  const parsed = tryParseJson(raw);
+  const matches = Array.isArray(parsed)
+    ? parsed
+    : Array.isArray(parsed?.matches)
+      ? parsed.matches
+      : Array.isArray(parsed?.results)
+        ? parsed.results
+        : Array.isArray(parsed?.items)
+          ? parsed.items
+          : null;
+  if (!matches) {
+    throw new Error('searchAllText returned unsupported payload');
   }
-  return count;
+  return matches
+    .map((match, index) => normalizeSearchMatch(match, index))
+    .filter(Boolean);
 }
 
 function runSearch(rawQuery) {
-  const query = rawQuery.trim().toLocaleLowerCase();
+  const query = rawQuery.trim();
   lastSearchQuery = query;
   if (!query) {
     searchResults = [];
@@ -254,14 +294,22 @@ function runSearch(rawQuery) {
     updateSearchUi();
     return;
   }
-  const index = buildSearchIndex();
-  searchResults = index
-    .map(({ pageIndex, text }) => ({ pageIndex, count: countOccurrences(text.toLocaleLowerCase(), query) }))
-    .filter((item) => item.count > 0);
+
+  try {
+    searchResults = searchViaEngine(query);
+  } catch (error) {
+    console.warn('엔진 검색 실패', error);
+    searchResults = [];
+    showError('문서 검색 엔진 응답을 읽지 못했습니다.');
+  }
+
   searchResultIndex = searchResults.length ? 0 : -1;
   updateSearchUi();
   if (searchResults.length) {
-    goToPage(searchResults[0].pageIndex + 1);
+    const first = searchResults[0];
+    if (Number.isFinite(first.pageIndex)) {
+      goToPage(first.pageIndex + 1);
+    }
   }
 }
 
@@ -278,7 +326,9 @@ function moveSearch(delta) {
   searchResultIndex = (searchResultIndex + delta + searchResults.length) % searchResults.length;
   const current = searchResults[searchResultIndex];
   updateSearchUi();
-  goToPage(current.pageIndex + 1);
+  if (Number.isFinite(current.pageIndex)) {
+    goToPage(current.pageIndex + 1);
+  }
 }
 
 function isSafeUrl(value) {
