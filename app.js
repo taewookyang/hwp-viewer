@@ -13,9 +13,11 @@ const SAFE_SVG_TAGS = new Set([
 const URL_ATTRS = new Set(['href', 'xlink:href']);
 const BAD_TAGS = new Set(['script', 'foreignObject', 'iframe', 'object', 'embed', 'audio', 'video', 'canvas']);
 const DEBUG_SEARCH = new URLSearchParams(location.search).get('debug') === '1' || location.hash.includes('debug');
-const ASSET_VERSION = '29';
-const SW_VERSION = 'hwp-viewer-v29';
+const ASSET_VERSION = '30';
+const SW_VERSION = 'hwp-viewer-v30';
 const SW_RELOAD_GUARD_KEY = 'hwp-viewer-sw-reload-version';
+const SW_DISABLED_RELOAD_KEY = 'hwp-viewer-sw-disabled-reload';
+const ENABLE_SERVICE_WORKER = false;
 
 const els = {
   openBtn: document.getElementById('openBtn'),
@@ -1487,7 +1489,31 @@ function registerEvents() {
 
 function registerServiceWorker() {
   if (!('serviceWorker' in navigator)) return;
-  window.addEventListener('load', () => {
+  window.addEventListener('load', async () => {
+    if (!ENABLE_SERVICE_WORKER) {
+      try {
+        const registrations = await navigator.serviceWorker.getRegistrations();
+        await Promise.all(registrations.map((registration) => registration.unregister()));
+        if (navigator.serviceWorker.controller) {
+          try {
+            if (sessionStorage.getItem(SW_DISABLED_RELOAD_KEY) !== ASSET_VERSION) {
+              sessionStorage.setItem(SW_DISABLED_RELOAD_KEY, ASSET_VERSION);
+              location.reload();
+              return;
+            }
+          } catch {
+            if (window.__swDisabledReloadVersion !== ASSET_VERSION) {
+              window.__swDisabledReloadVersion = ASSET_VERSION;
+              location.reload();
+              return;
+            }
+          }
+        }
+      } catch (error) {
+        console.warn('서비스워커 해제 실패', error);
+      }
+      return;
+    }
     navigator.serviceWorker.register(`./sw.js?v=${ASSET_VERSION}`).then((registration) => {
       registerServiceWorkerLifecycle(registration);
     }).catch((error) => {
