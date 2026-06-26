@@ -159,8 +159,12 @@ button, input {
   top: calc(63px + env(safe-area-inset-top));
   z-index: 9;
   padding: 8px 14px 0;
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
 }
-#zoomControls {
+#zoomControls,
+#searchControls {
   display: inline-flex;
   align-items: center;
   gap: 8px;
@@ -174,11 +178,21 @@ button, input {
   min-height: 36px;
   padding: 6px 10px;
 }
-#zoomLabel {
+#zoomLabel,
+#searchStatus {
   min-width: 44px;
   color: var(--text-dim);
   font-size: 13px;
   text-align: center;
+}
+#searchInput {
+  width: 148px;
+  min-height: 36px;
+  border-radius: 10px;
+  border: 1px solid var(--border);
+  background: var(--surface-2);
+  color: var(--text);
+  padding: 6px 10px;
 }
 #viewer-wrap {
   flex: 1 1 auto;

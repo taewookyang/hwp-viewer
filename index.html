@@ -8,8 +8,8 @@
   <meta name="theme-color" content="#1c1c1e" />
   <meta name="description" content="광고 없는 HWP/HWPX 뷰어. 파일 업로드 없이 브라우저 안에서 문서를 엽니다." />
   <title>한글 뷰어</title>
-  <link rel="manifest" href="manifest.json?v=5" />
-  <link rel="stylesheet" href="styles.css?v=5" />
+  <link rel="manifest" href="manifest.json?v=6" />
+  <link rel="stylesheet" href="styles.css?v=6" />
 </head>
 <body>
   <div id="app">
@@ -34,6 +34,12 @@
         <button class="btn toolbtn" id="zoomResetBtn" aria-label="배율 초기화">100%</button>
         <button class="btn toolbtn" id="zoomInBtn" aria-label="확대">＋</button>
         <span id="zoomLabel" aria-live="polite">100%</span>
+      </div>
+      <div id="searchControls">
+        <input id="searchInput" type="search" inputmode="search" placeholder="문서에서 찾기" aria-label="문서에서 찾기" />
+        <button class="btn toolbtn" id="searchPrevBtn" aria-label="이전 검색 결과">↑</button>
+        <button class="btn toolbtn" id="searchNextBtn" aria-label="다음 검색 결과">↓</button>
+        <span id="searchStatus" aria-live="polite">검색 전</span>
       </div>
     </div>
 
@@ -70,6 +76,6 @@
     <input type="file" id="fileInput" accept=".hwp,.hwpx,application/x-hwp,application/haansofthwpx" />
   </div>
 
-  <script type="module" src="./app.js?v=5"></script>
+  <script type="module" src="./app.js?v=6"></script>
 </body>
 </html>

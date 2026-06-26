@@ -28,6 +28,10 @@ const els = {
   zoomResetBtn: document.getElementById('zoomResetBtn'),
   zoomInBtn: document.getElementById('zoomInBtn'),
   zoomLabel: document.getElementById('zoomLabel'),
+  searchInput: document.getElementById('searchInput'),
+  searchPrevBtn: document.getElementById('searchPrevBtn'),
+  searchNextBtn: document.getElementById('searchNextBtn'),
+  searchStatus: document.getElementById('searchStatus'),
   empty: document.getElementById('empty'),
   viewerWrap: document.getElementById('viewer-wrap'),
   pageContainer: document.getElementById('page-container'),
@@ -50,6 +54,10 @@ const MIN_ZOOM = 0.75;
 const MAX_ZOOM = 2.5;
 const ZOOM_STEP = 0.25;
 let currentFile = null;
+let pageSearchIndex = [];
+let searchResults = [];
+let searchResultIndex = -1;
+let lastSearchQuery = '';
 let touchStartX = null;
 let touchStartY = null;
 let errorTimer = null;
@@ -109,6 +117,7 @@ function cleanupDocument() {
   }
   doc = null;
   currentFile = null;
+  pageSearchIndex = [];
 }
 
 function formatFileSize(size) {
@@ -154,6 +163,113 @@ function setZoom(nextZoom) {
 
 function resetZoom() {
   setZoom(1);
+}
+
+function resetSearchState({ keepInput = false } = {}) {
+  pageSearchIndex = [];
+  searchResults = [];
+  searchResultIndex = -1;
+  lastSearchQuery = '';
+  if (!keepInput) els.searchInput.value = '';
+  updateSearchUi();
+}
+
+function updateSearchUi() {
+  const hasDoc = !!doc && pageCount > 0;
+  const hasQuery = !!lastSearchQuery;
+  els.searchInput.disabled = !hasDoc;
+  els.searchPrevBtn.disabled = !hasQuery || searchResults.length < 1;
+  els.searchNextBtn.disabled = !hasQuery || searchResults.length < 1;
+  if (!hasDoc) {
+    els.searchStatus.textContent = '문서 열기 후 검색';
+    return;
+  }
+  if (!hasQuery) {
+    els.searchStatus.textContent = '검색 전';
+    return;
+  }
+  if (!searchResults.length) {
+    els.searchStatus.textContent = '결과 없음';
+    return;
+  }
+  const current = searchResults[searchResultIndex] ?? searchResults[0];
+  els.searchStatus.textContent = `${searchResultIndex + 1}/${searchResults.length} · ${current.pageIndex + 1}페이지`;
+}
+
+function extractTextFragments(value, out = []) {
+  if (value == null) return out;
+  if (Array.isArray(value)) {
+    for (const item of value) extractTextFragments(item, out);
+    return out;
+  }
+  if (typeof value === 'object') {
+    if (typeof value.text === 'string' && value.text.trim()) out.push(value.text);
+    for (const [key, child] of Object.entries(value)) {
+      if (key === 'text') continue;
+      extractTextFragments(child, out);
+    }
+  }
+  return out;
+}
+
+function buildSearchIndex() {
+  if (!doc || pageCount < 1) return [];
+  if (pageSearchIndex.length === pageCount) return pageSearchIndex;
+  const built = [];
+  for (let pageIndex = 0; pageIndex < pageCount; pageIndex += 1) {
+    try {
+      const raw = doc.getPageTextLayout(pageIndex);
+      const layout = JSON.parse(raw);
+      const text = extractTextFragments(layout).join(' ').replace(/\s+/g, ' ').trim();
+      built.push({ pageIndex, text });
+    } catch (error) {
+      console.warn('페이지 텍스트 추출 실패', pageIndex, error);
+      built.push({ pageIndex, text: '' });
+    }
+  }
+  pageSearchIndex = built;
+  return built;
+}
+
+function countOccurrences(text, query) {
+  if (!text || !query) return 0;
+  let count = 0;
+  let from = 0;
+  while (true) {
+    const idx = text.indexOf(query, from);
+    if (idx === -1) break;
+    count += 1;
+    from = idx + query.length;
+  }
+  return count;
+}
+
+function runSearch(rawQuery) {
+  const query = rawQuery.trim().toLocaleLowerCase();
+  lastSearchQuery = query;
+  if (!query) {
+    searchResults = [];
+    searchResultIndex = -1;
+    updateSearchUi();
+    return;
+  }
+  const index = buildSearchIndex();
+  searchResults = index
+    .map(({ pageIndex, text }) => ({ pageIndex, count: countOccurrences(text.toLocaleLowerCase(), query) }))
+    .filter((item) => item.count > 0);
+  searchResultIndex = searchResults.length ? 0 : -1;
+  updateSearchUi();
+  if (searchResults.length) {
+    goToPage(searchResults[0].pageIndex + 1);
+  }
+}
+
+function moveSearch(delta) {
+  if (!searchResults.length) return;
+  searchResultIndex = (searchResultIndex + delta + searchResults.length) % searchResults.length;
+  const current = searchResults[searchResultIndex];
+  updateSearchUi();
+  goToPage(current.pageIndex + 1);
 }
 
 function isSafeUrl(value) {
@@ -282,6 +398,7 @@ async function openFile(file) {
     els.title.classList.remove('placeholder');
     updateDocMeta();
     resetZoom();
+    resetSearchState();
     els.empty.hidden = true;
     els.viewerWrap.hidden = false;
     els.bottombar.hidden = false;
@@ -297,6 +414,7 @@ async function openFile(file) {
     currentPage = 0;
     els.toolbar.hidden = true;
     updateDocMeta();
+    resetSearchState();
     updatePager();
     showError('문서를 열 수 없습니다. 손상되었거나 아직 지원되지 않는 형식일 수 있습니다.');
   } finally {
@@ -364,6 +482,16 @@ function registerEvents() {
   els.zoomResetBtn.addEventListener('click', resetZoom);
   els.zoomInBtn.addEventListener('click', () => setZoom(currentZoom + ZOOM_STEP));
 
+  els.searchInput.addEventListener('keydown', (event) => {
+    if (event.key === 'Enter') {
+      event.preventDefault();
+      runSearch(els.searchInput.value);
+    }
+  });
+  els.searchInput.addEventListener('search', () => runSearch(els.searchInput.value));
+  els.searchPrevBtn.addEventListener('click', () => moveSearch(-1));
+  els.searchNextBtn.addEventListener('click', () => moveSearch(1));
+
   els.viewerWrap.addEventListener('touchstart', (event) => {
     touchStartX = event.touches[0]?.clientX ?? null;
     touchStartY = event.touches[0]?.clientY ?? null;
@@ -408,6 +536,7 @@ async function boot() {
   updatePager();
   updateDocMeta();
   updateZoomUi();
+  updateSearchUi();
   registerEvents();
   await clearServiceWorkers();
 }
