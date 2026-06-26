@@ -66,13 +66,16 @@ let searchDebounceTimer = null;
 let touchStartX = null;
 let touchStartY = null;
 let errorTimer = null;
+const pageTextLayoutCache = new Map();
 let debugState = {
   query: '',
   rawSearch: null,
   normalizedResults: [],
   currentMatch: null,
+  selectedText: null,
   rawRects: null,
   rects: [],
+  rectSource: null,
 };
 
 function setTheme(theme) {
@@ -129,7 +132,9 @@ function updateDebugPanel() {
     resultCount: searchResults.length,
     resultIndex: searchResultIndex,
     currentMatch: debugState.currentMatch,
+    selectedText: debugState.selectedText,
     rectCount: debugState.rects?.length ?? 0,
+    rectSource: debugState.rectSource,
     rects: debugState.rects,
     rawSearch: debugState.rawSearch,
     rawRects: debugState.rawRects,
@@ -173,6 +178,7 @@ function cleanupDocument() {
   }
   doc = null;
   currentFile = null;
+  pageTextLayoutCache.clear();
 }
 
 function formatFileSize(size) {
@@ -230,9 +236,12 @@ function resetSearchState({ keepInput = false } = {}) {
     rawSearch: null,
     normalizedResults: [],
     currentMatch: null,
+    selectedText: null,
     rawRects: null,
     rects: [],
+    rectSource: null,
   };
+  pageTextLayoutCache.clear();
   if (!keepInput) els.searchInput.value = '';
   updateSearchUi();
   updateDebugPanel();
@@ -485,6 +494,185 @@ function collectRects(value, out = []) {
   return out;
 }
 
+function parseNumericArray(value) {
+  if (!Array.isArray(value)) return null;
+  const nums = value.map(Number);
+  return nums.every(Number.isFinite) ? nums : null;
+}
+
+function findNumericArrayDeep(source, minLength = 2, seen = new Set()) {
+  if (!source || typeof source !== 'object' || seen.has(source)) return null;
+  seen.add(source);
+  if (Array.isArray(source)) {
+    const parsed = parseNumericArray(source);
+    if (parsed && parsed.length >= minLength) return parsed;
+    for (const item of source) {
+      const nested = findNumericArrayDeep(item, minLength, seen);
+      if (nested) return nested;
+    }
+    return null;
+  }
+  for (const value of Object.values(source)) {
+    const parsed = parseNumericArray(value);
+    if (parsed && parsed.length >= minLength) return parsed;
+  }
+  for (const value of Object.values(source)) {
+    if (value && typeof value === 'object') {
+      const nested = findNumericArrayDeep(value, minLength, seen);
+      if (nested) return nested;
+    }
+  }
+  return null;
+}
+
+function getStringField(source, keys) {
+  if (!source || typeof source !== 'object') return null;
+  for (const key of keys) {
+    const value = source[key];
+    if (typeof value === 'string' && value.length) return value;
+  }
+  return null;
+}
+
+function normalizeTextRunCandidate(run) {
+  if (!run || typeof run !== 'object') return null;
+  const text = getStringField(run, ['text', 'content', 'string', 'str', 'value', 'chars', 'label']);
+  if (!text) return null;
+  const boundaries = parseNumericArray(
+    run.charXBoundaries ?? run.charBoundaries ?? run.xBoundaries ?? run.x_bounds ?? run.charXPositions ?? run.xPositions ?? run.x_positions,
+  ) ?? findNumericArrayDeep(run, Math.max(2, text.length + 1));
+  if (!boundaries || boundaries.length < text.length + 1) return null;
+  const x = Number(run.x ?? run.left ?? run.x0 ?? boundaries[0]);
+  const y = Number(run.y ?? run.top ?? run.y0 ?? run.baselineY ?? run.originY);
+  const height = Number(run.height ?? run.h ?? run.lineHeight ?? run.bboxHeight ?? run.fontSize);
+  const width = boundaries[boundaries.length - 1] - boundaries[0];
+  const pageIndex = extractNormalizedPageIndex(run);
+  const paragraphIndex = pickIntDeep(run, ['paragraphIndex', 'paraIdx', 'para_idx', 'para']);
+  if (![x, y, height].every(Number.isFinite) || height <= 0 || width <= 0) return null;
+  return { text, boundaries, x, y, width, height, pageIndex, paragraphIndex, raw: run };
+}
+
+function collectTextRuns(value, out = [], seen = new Set()) {
+  if (!value || typeof value !== 'object' || seen.has(value)) return out;
+  seen.add(value);
+  if (Array.isArray(value)) {
+    for (const item of value) collectTextRuns(item, out, seen);
+    return out;
+  }
+  const run = normalizeTextRunCandidate(value);
+  if (run) out.push(run);
+  for (const child of Object.values(value)) {
+    if (child && typeof child === 'object') collectTextRuns(child, out, seen);
+  }
+  return out;
+}
+
+function getPageTextLayoutData(pageIndex) {
+  if (!doc || !Number.isFinite(pageIndex)) return null;
+  if (pageTextLayoutCache.has(pageIndex)) return pageTextLayoutCache.get(pageIndex);
+  try {
+    const raw = doc.getPageTextLayout(pageIndex);
+    const parsed = tryParseJson(raw);
+    const data = { raw: parsed, runs: collectTextRuns(parsed) };
+    pageTextLayoutCache.set(pageIndex, data);
+    return data;
+  } catch (error) {
+    console.warn('페이지 텍스트 레이아웃 조회 실패', error);
+    const data = { raw: { error: String(error) }, runs: [] };
+    pageTextLayoutCache.set(pageIndex, data);
+    return data;
+  }
+}
+
+function getMatchSelectionText(range) {
+  if (!doc || !range) return null;
+  try {
+    const raw = doc.copySelection(
+      range.sectionIndex,
+      range.startParaIndex,
+      range.startCharOffset,
+      range.endParaIndex,
+      range.endCharOffset,
+    );
+    const parsed = tryParseJson(raw);
+    if (typeof parsed?.text === 'string' && parsed.text.length) return parsed.text;
+  } catch (error) {
+    console.warn('선택 텍스트 조회 실패', error);
+  }
+  return lastSearchQuery || null;
+}
+
+function findOccurrenceIndexes(text, query) {
+  if (!text || !query) return [];
+  const out = [];
+  let from = 0;
+  while (from <= text.length - query.length) {
+    const idx = text.indexOf(query, from);
+    if (idx === -1) break;
+    out.push(idx);
+    from = idx + 1;
+  }
+  return out;
+}
+
+function scoreRunCandidate(run, rect, matchText, match) {
+  let score = 0;
+  if (run.paragraphIndex != null && match?.paragraphIndex != null && run.paragraphIndex === match.paragraphIndex) score += 1000;
+  if (matchText && run.text.includes(matchText)) score += 200;
+  const rectCenterY = rect.y + rect.height / 2;
+  const runCenterY = run.y + run.height / 2;
+  score -= Math.abs(rectCenterY - runCenterY) * 4;
+  const rectCenterX = rect.x + rect.width / 2;
+  const runCenterX = run.x + run.width / 2;
+  score -= Math.abs(rectCenterX - runCenterX) * 0.4;
+  score -= Math.abs(rect.width - run.width) * 0.05;
+  return score;
+}
+
+function refineRectWithTextRun(run, rect, matchText) {
+  const occurrences = findOccurrenceIndexes(run.text, matchText);
+  if (!occurrences.length) return null;
+  let best = null;
+  let bestDistance = Infinity;
+  const targetX = rect.x + Math.min(rect.width / 2, 24);
+  for (const startIndex of occurrences) {
+    const endIndex = startIndex + matchText.length;
+    const x0 = run.boundaries[startIndex];
+    const x1 = run.boundaries[endIndex];
+    if (![x0, x1].every(Number.isFinite) || x1 <= x0) continue;
+    const center = (x0 + x1) / 2;
+    const distance = Math.abs(center - targetX);
+    if (distance < bestDistance) {
+      bestDistance = distance;
+      best = {
+        x: x0,
+        y: run.y,
+        width: x1 - x0,
+        height: run.height,
+        pageIndex: rect.pageIndex,
+      };
+    }
+  }
+  return best;
+}
+
+function refineRectsWithTextLayout(match, rects, pageIndex, matchText) {
+  if (!rects.length || !matchText || !Number.isFinite(pageIndex)) return null;
+  const layout = getPageTextLayoutData(pageIndex);
+  if (!layout?.runs?.length) return null;
+  const refined = [];
+  for (const rect of rects) {
+    const candidates = layout.runs
+      .filter((run) => (run.pageIndex == null || run.pageIndex === pageIndex) && run.text.includes(matchText))
+      .map((run) => ({ run, score: scoreRunCandidate(run, rect, matchText, match) }))
+      .sort((a, b) => b.score - a.score);
+    const chosen = candidates[0]?.run;
+    const improved = chosen ? refineRectWithTextRun(chosen, rect, matchText) : null;
+    refined.push(improved ?? rect);
+  }
+  return refined;
+}
+
 function getCurrentSearchMatch() {
   if (searchResultIndex < 0 || searchResultIndex >= searchResults.length) return null;
   return searchResults[searchResultIndex] ?? null;
@@ -526,13 +714,20 @@ function computeSearchHighlightData(match = getCurrentSearchMatch()) {
     const parsed = tryParseJson(raw);
     const rects = collectRects(parsed);
     const rectPageIndex = rects.find((rect) => Number.isFinite(rect.pageIndex))?.pageIndex ?? null;
+    const pageIndex = rectPageIndex ?? match.pageIndex ?? null;
+    const selectionText = getMatchSelectionText(range);
+    const refinedRects = refineRectsWithTextLayout(match, rects, pageIndex, selectionText);
     debugState.rawRects = parsed;
-    debugState.rects = rects;
-    return { rects, pageIndex: rectPageIndex ?? match.pageIndex ?? null, raw: parsed };
+    debugState.selectedText = selectionText;
+    debugState.rects = refinedRects ?? rects;
+    debugState.rectSource = refinedRects ? 'layout-refined' : 'engine-selection-rects';
+    return { rects: refinedRects ?? rects, pageIndex, raw: parsed };
   } catch (error) {
     console.warn('검색 하이라이트 좌표 계산 실패', error);
     debugState.rawRects = { error: String(error) };
+    debugState.selectedText = null;
     debugState.rects = [];
+    debugState.rectSource = 'error';
     return { rects: [], pageIndex: match.pageIndex ?? null, raw: { error: String(error) } };
   }
 }
