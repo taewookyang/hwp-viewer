@@ -1269,18 +1269,18 @@ async function openFile(file) {
   }
 }
 
-function goToPage(pageNumber) {
-  if (!pageCount) return false;
-  const requestedPage = Number(pageNumber);
-  if (!Number.isFinite(requestedPage)) return false;
-  const nextPage = Math.max(1, Math.min(pageCount, Math.trunc(requestedPage)));
-  const nextIndex = nextPage - 1;
-  if (nextIndex === currentPage && lastRenderedPage === currentPage) {
-    updatePager();
-    return false;
+function openFilePicker() {
+  const picker = els.fileInput;
+  if (!picker) return;
+  try {
+    if (typeof picker.showPicker === 'function') {
+      picker.showPicker();
+      return;
+    }
+  } catch (error) {
+    console.warn('showPicker 실패, click fallback 사용', error);
   }
-  currentPage = nextIndex;
-  return renderCurrentPage();
+  picker.click();
 }
 
 function handlePageInputCommit() {
@@ -1299,8 +1299,8 @@ function handlePageInputCommit() {
 }
 
 function registerEvents() {
-  els.openBtn.addEventListener('click', () => els.fileInput.click());
-  els.openBtn2.addEventListener('click', () => els.fileInput.click());
+  els.openBtn.addEventListener('click', openFilePicker);
+  els.openBtn2.addEventListener('click', openFilePicker);
   els.themeBtn.addEventListener('click', toggleTheme);
 
   els.fileInput.addEventListener('change', (event) => {
