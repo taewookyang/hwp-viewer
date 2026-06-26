@@ -69,6 +69,11 @@ let pageSlots = [];
 let pageAspectRatio = Math.sqrt(2);
 let pageSlotHeight = 0;
 let scrollSyncRaf = null;
+let slotObserver = null;
+const renderedSlotAccess = new Map();
+const MAX_RENDERED_SLOTS = 5;
+const MAX_LAYOUT_CACHE = 8;
+const SLOT_PRERENDER_RADIUS = 1;
 const pageTextLayoutCache = new Map();
 let debugState = {
   query: '',
@@ -193,6 +198,9 @@ function cleanupDocument() {
   pageSlots = [];
   pageSlotHeight = 0;
   scrollSyncRaf = null;
+  slotObserver?.disconnect();
+  slotObserver = null;
+  renderedSlotAccess.clear();
   els.pageContainer.replaceChildren();
   pageTextLayoutCache.clear();
 }
@@ -593,20 +601,30 @@ function collectTextRuns(value, out = [], seen = new Set()) {
   return out;
 }
 
+function touchPageTextLayoutCache(pageIndex, data) {
+  if (pageTextLayoutCache.has(pageIndex)) pageTextLayoutCache.delete(pageIndex);
+  pageTextLayoutCache.set(pageIndex, data);
+  while (pageTextLayoutCache.size > MAX_LAYOUT_CACHE) {
+    const oldest = pageTextLayoutCache.keys().next().value;
+    pageTextLayoutCache.delete(oldest);
+  }
+  return data;
+}
+
 function getPageTextLayoutData(pageIndex) {
   if (!doc || !Number.isFinite(pageIndex)) return null;
-  if (pageTextLayoutCache.has(pageIndex)) return pageTextLayoutCache.get(pageIndex);
+  if (pageTextLayoutCache.has(pageIndex)) {
+    return touchPageTextLayoutCache(pageIndex, pageTextLayoutCache.get(pageIndex));
+  }
   try {
     const raw = doc.getPageTextLayout(pageIndex);
     const parsed = tryParseJson(raw);
     const data = { raw: parsed, runs: collectTextRuns(parsed) };
-    pageTextLayoutCache.set(pageIndex, data);
-    return data;
+    return touchPageTextLayoutCache(pageIndex, data);
   } catch (error) {
     console.warn('페이지 텍스트 레이아웃 조회 실패', error);
     const data = { raw: { error: String(error) }, runs: [] };
-    pageTextLayoutCache.set(pageIndex, data);
-    return data;
+    return touchPageTextLayoutCache(pageIndex, data);
   }
 }
 
@@ -999,10 +1017,51 @@ function getPageSlot(pageIndex) {
   return Number.isFinite(pageIndex) ? pageSlots[pageIndex] ?? null : null;
 }
 
+function touchRenderedSlot(pageIndex) {
+  if (renderedSlotAccess.has(pageIndex)) renderedSlotAccess.delete(pageIndex);
+  renderedSlotAccess.set(pageIndex, Date.now());
+}
+
+function getPreservedPageIndexes(centerPage) {
+  const keep = new Set();
+  for (let i = centerPage - SLOT_PRERENDER_RADIUS; i <= centerPage + SLOT_PRERENDER_RADIUS; i += 1) {
+    if (i >= 0 && i < pageCount) keep.add(i);
+  }
+  return keep;
+}
+
+function clearPageSlot(pageIndex) {
+  const slot = getPageSlot(pageIndex);
+  if (!slot) return;
+  const inner = slot.firstElementChild ?? slot;
+  inner.replaceChildren();
+  slot.dataset.rendered = '0';
+  renderedSlotAccess.delete(pageIndex);
+}
+
+function trimRenderedSlots(preserve = getPreservedPageIndexes(currentPage)) {
+  if (renderedSlotAccess.size <= MAX_RENDERED_SLOTS) return;
+  const candidates = [...renderedSlotAccess.entries()]
+    .filter(([pageIndex]) => !preserve.has(pageIndex))
+    .sort((a, b) => {
+      const distanceDiff = Math.abs(b[0] - currentPage) - Math.abs(a[0] - currentPage);
+      if (distanceDiff !== 0) return distanceDiff;
+      return a[1] - b[1];
+    });
+  for (const [pageIndex] of candidates) {
+    if (renderedSlotAccess.size <= MAX_RENDERED_SLOTS) break;
+    clearPageSlot(pageIndex);
+  }
+}
+
 function renderPageIntoSlot(pageIndex) {
   if (!doc || pageIndex < 0 || pageIndex >= pageCount) return false;
   const slot = getPageSlot(pageIndex);
   if (!slot) return false;
+  if (slot.dataset.rendered === '1') {
+    touchRenderedSlot(pageIndex);
+    return true;
+  }
   try {
     const svgText = doc.renderPageSvg(pageIndex);
     const safeSvg = sanitizeSvg(svgText);
@@ -1010,6 +1069,7 @@ function renderPageIntoSlot(pageIndex) {
     const inner = slot.firstElementChild ?? slot;
     inner.replaceChildren(safeSvg);
     slot.dataset.rendered = '1';
+    touchRenderedSlot(pageIndex);
     updatePageSlotHeights();
     lastRenderedPage = pageIndex;
     return true;
@@ -1020,9 +1080,31 @@ function renderPageIntoSlot(pageIndex) {
   }
 }
 
-function renderAllPages() {
-  for (let i = 0; i < pageCount; i += 1) {
+function ensurePagesAround(pageIndex, radius = SLOT_PRERENDER_RADIUS) {
+  const preserve = new Set();
+  for (let i = pageIndex - radius; i <= pageIndex + radius; i += 1) {
+    if (i < 0 || i >= pageCount) continue;
+    preserve.add(i);
     renderPageIntoSlot(i);
+  }
+  trimRenderedSlots(preserve);
+}
+
+function refreshSlotObserver() {
+  slotObserver?.disconnect();
+  slotObserver = null;
+  if (!pageSlots.length || typeof IntersectionObserver !== 'function') return;
+  const rootMargin = `${Math.max(pageSlotHeight, 320)}px 0px ${Math.max(pageSlotHeight, 320)}px 0px`;
+  slotObserver = new IntersectionObserver((entries) => {
+    for (const entry of entries) {
+      if (!entry.isIntersecting) continue;
+      const pageIndex = Number(entry.target.dataset.pageIndex);
+      if (!Number.isFinite(pageIndex)) continue;
+      ensurePagesAround(pageIndex);
+    }
+  }, { root: els.viewerWrap, rootMargin, threshold: 0.01 });
+  for (const slot of pageSlots) {
+    slotObserver.observe(slot);
   }
 }
 
@@ -1051,6 +1133,8 @@ function syncCurrentPageFromViewport() {
     currentPage = nextIndex;
   }
   updatePager();
+  ensurePagesAround(currentPage);
+  trimRenderedSlots(getPreservedPageIndexes(currentPage));
 }
 
 function queueViewportSync() {
@@ -1070,9 +1154,11 @@ function goToPage(pageNumber, options = {}) {
   const slot = getPageSlot(nextIndex);
   if (!slot) return false;
   const behavior = options.behavior ?? 'smooth';
+  ensurePagesAround(nextIndex);
   currentPage = nextIndex;
   updatePager();
   slot.scrollIntoView({ block: 'start', behavior });
+  trimRenderedSlots(getPreservedPageIndexes(nextIndex));
   return true;
 }
 
@@ -1129,7 +1215,8 @@ async function openFile(file) {
     setLoading(true, '첫 페이지를 그리는 중…');
     await nextPaint();
     buildPageStack();
-    renderAllPages();
+    ensurePagesAround(0, SLOT_PRERENDER_RADIUS + 1);
+    refreshSlotObserver();
     goToPage(1, { behavior: 'auto' });
     syncCurrentPageFromViewport();
   } catch (error) {
@@ -1221,6 +1308,8 @@ function registerEvents() {
   els.viewerWrap.addEventListener('scroll', queueViewportSync, { passive: true });
   window.addEventListener('resize', () => {
     updatePageSlotHeights();
+    refreshSlotObserver();
+    ensurePagesAround(currentPage);
     queueViewportSync();
   });
   window.addEventListener('beforeunload', cleanupDocument);
