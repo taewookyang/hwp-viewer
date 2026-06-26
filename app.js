@@ -124,22 +124,23 @@ function setLoading(on, message = '문서를 여는 중…') {
 
 function updateDebugPanel() {
   if (!els.debugPanel || !els.debugWrap) return;
-  const hasDebugPayload = Boolean(currentFile) && (
-    Boolean(debugState.query) ||
-    debugState.rawSearch != null ||
-    debugState.rawRects != null ||
-    searchResults.length > 0
-  );
-  if (!DEBUG_SEARCH || !hasDebugPayload) {
+  if (!DEBUG_SEARCH || !currentFile) {
     els.debugWrap.hidden = true;
     els.debugPanel.hidden = true;
     return;
   }
   els.debugWrap.hidden = false;
   els.debugPanel.hidden = false;
+  const renderedPages = [...renderedSlotAccess.keys()].sort((a, b) => a - b).map((pageIndex) => ({
+    page: pageIndex + 1,
+    rendered: getPageSlot(pageIndex)?.dataset.rendered === '1',
+  }));
   const payload = {
     page: currentPage + 1,
     pageCount,
+    scrollTop: Math.round(els.viewerWrap?.scrollTop ?? 0),
+    pageSlotHeight,
+    renderedPages,
     query: debugState.query,
     resultCount: searchResults.length,
     resultIndex: searchResultIndex,
@@ -1246,6 +1247,7 @@ async function openFile(file) {
     els.viewerWrap.hidden = false;
     els.bottombar.hidden = false;
     els.toolbar.hidden = false;
+    els.viewerWrap.scrollTop = 0;
 
     setLoading(true, '첫 페이지를 그리는 중…');
     await nextPaint();
