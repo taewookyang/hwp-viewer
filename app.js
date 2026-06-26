@@ -412,6 +412,7 @@ function normalizeSearchMatch(match, fallbackIndex = 0) {
   const cellContext = pickValueDeep(match, ['cellContext', 'cell_context', 'cell']);
   return {
     key: String(match.id ?? match.key ?? `${sectionIndex ?? 'x'}-${paragraphIndex ?? 'x'}-${charOffset ?? fallbackIndex}`),
+    engineOrder: fallbackIndex,
     pageIndex,
     sectionIndex,
     paragraphIndex,
@@ -423,6 +424,26 @@ function normalizeSearchMatch(match, fallbackIndex = 0) {
     cellContext,
     raw: match,
   };
+}
+
+function compareSearchMatches(a, b) {
+  const aPage = Number.isFinite(a?.pageIndex) ? a.pageIndex : Number.POSITIVE_INFINITY;
+  const bPage = Number.isFinite(b?.pageIndex) ? b.pageIndex : Number.POSITIVE_INFINITY;
+  if (aPage !== bPage) return aPage - bPage;
+
+  const aSection = Number.isFinite(a?.sectionIndex) ? a.sectionIndex : Number.POSITIVE_INFINITY;
+  const bSection = Number.isFinite(b?.sectionIndex) ? b.sectionIndex : Number.POSITIVE_INFINITY;
+  if (aSection !== bSection) return aSection - bSection;
+
+  const aPara = Number.isFinite(a?.paragraphIndex) ? a.paragraphIndex : Number.POSITIVE_INFINITY;
+  const bPara = Number.isFinite(b?.paragraphIndex) ? b.paragraphIndex : Number.POSITIVE_INFINITY;
+  if (aPara !== bPara) return aPara - bPara;
+
+  const aChar = Number.isFinite(a?.charOffset) ? a.charOffset : Number.POSITIVE_INFINITY;
+  const bChar = Number.isFinite(b?.charOffset) ? b.charOffset : Number.POSITIVE_INFINITY;
+  if (aChar !== bChar) return aChar - bChar;
+
+  return (a?.engineOrder ?? 0) - (b?.engineOrder ?? 0);
 }
 
 function searchViaEngine(rawQuery) {
@@ -442,7 +463,8 @@ function searchViaEngine(rawQuery) {
   }
   const normalized = matches
     .map((match, index) => normalizeSearchMatch(match, index))
-    .filter(Boolean);
+    .filter(Boolean)
+    .sort(compareSearchMatches);
   debugState.rawSearch = parsed;
   debugState.normalizedResults = normalized;
   return normalized;
@@ -1384,7 +1406,7 @@ function registerEvents() {
 function registerServiceWorker() {
   if (!('serviceWorker' in navigator)) return;
   window.addEventListener('load', () => {
-    navigator.serviceWorker.register('./sw.js?v=23');
+    navigator.serviceWorker.register('./sw.js?v=24');
   });
 }
 
