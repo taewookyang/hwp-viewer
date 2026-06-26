@@ -1,0 +1,17 @@
+# OS/editor noise
+.DS_Store
+Thumbs.db
+
+# Local runtime noise
+*.log
+*.tmp
+*.bak
+
+# Optional future local env/config
+.env
+.env.*
+!.env.example
+
+# Python cache in case helper scripts are added later
+__pycache__/
+*.pyc

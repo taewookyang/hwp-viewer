@@ -1,0 +1,19 @@
+{
+  "name": "한글 뷰어",
+  "short_name": "한글뷰어",
+  "description": "광고 없는 HWP/HWPX 뷰어. 파일 업로드 없이 브라우저 안에서 문서를 엽니다.",
+  "start_url": "./index.html",
+  "scope": "./",
+  "display": "standalone",
+  "background_color": "#1c1c1e",
+  "theme_color": "#1c1c1e",
+  "orientation": "any",
+  "icons": [
+    {
+      "src": "icon.svg",
+      "sizes": "any",
+      "type": "image/svg+xml",
+      "purpose": "any maskable"
+    }
+  ]
+}
