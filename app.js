@@ -58,6 +58,7 @@ let pageSearchIndex = [];
 let searchResults = [];
 let searchResultIndex = -1;
 let lastSearchQuery = '';
+let searchDebounceTimer = null;
 let touchStartX = null;
 let touchStartY = null;
 let errorTimer = null;
@@ -262,6 +263,14 @@ function runSearch(rawQuery) {
   if (searchResults.length) {
     goToPage(searchResults[0].pageIndex + 1);
   }
+}
+
+function queueSearch(rawQuery, delay = 250) {
+  if (searchDebounceTimer) clearTimeout(searchDebounceTimer);
+  searchDebounceTimer = setTimeout(() => {
+    runSearch(rawQuery);
+    searchDebounceTimer = null;
+  }, delay);
 }
 
 function moveSearch(delta) {
@@ -488,6 +497,8 @@ function registerEvents() {
       runSearch(els.searchInput.value);
     }
   });
+  els.searchInput.addEventListener('input', () => queueSearch(els.searchInput.value));
+  els.searchInput.addEventListener('compositionend', () => queueSearch(els.searchInput.value, 0));
   els.searchInput.addEventListener('search', () => runSearch(els.searchInput.value));
   els.searchPrevBtn.addEventListener('click', () => moveSearch(-1));
   els.searchNextBtn.addEventListener('click', () => moveSearch(1));
