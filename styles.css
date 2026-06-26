@@ -43,6 +43,11 @@ body {
 button, input {
   font: inherit;
 }
+
+[hidden] {
+  display: none !important;
+}
+
 #app {
   display: flex;
   flex-direction: column;

@@ -1,4 +1,4 @@
-const CACHE_NAME = 'hwp-viewer-v2';
+const CACHE_NAME = 'hwp-viewer-v3';
 const ASSETS = [
   './index.html',
   './styles.css',

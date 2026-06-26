@@ -330,6 +330,7 @@ function registerServiceWorker() {
 }
 
 function boot() {
+  setLoading(false);
   initTheme();
   updatePager();
   registerEvents();
