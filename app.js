@@ -13,8 +13,8 @@ const SAFE_SVG_TAGS = new Set([
 const URL_ATTRS = new Set(['href', 'xlink:href']);
 const BAD_TAGS = new Set(['script', 'foreignObject', 'iframe', 'object', 'embed', 'audio', 'video', 'canvas']);
 const DEBUG_SEARCH = new URLSearchParams(location.search).get('debug') === '1' || location.hash.includes('debug');
-const ASSET_VERSION = '26';
-const SW_VERSION = 'hwp-viewer-v26';
+const ASSET_VERSION = '27';
+const SW_VERSION = 'hwp-viewer-v27';
 const SW_RELOAD_GUARD_KEY = 'hwp-viewer-sw-reload-version';
 
 const els = {
@@ -73,6 +73,7 @@ let pageAspectRatio = Math.sqrt(2);
 let pageSlotHeight = 0;
 let scrollSyncRaf = null;
 let slotObserver = null;
+let lastSwEvent = null;
 const renderedSlotAccess = new Map();
 const ENABLE_SLOT_TRIM = false;
 const MAX_RENDERED_SLOTS = 5;
@@ -123,6 +124,17 @@ function showError(message) {
 
 function reloadForServiceWorker(version) {
   const targetVersion = typeof version === 'string' && version ? version : SW_VERSION;
+  const shouldDeferReload = DEBUG_SEARCH || !!currentFile || !!doc;
+  lastSwEvent = {
+    version: targetVersion,
+    deferredReload: shouldDeferReload,
+    at: new Date().toISOString(),
+  };
+  if (shouldDeferReload) {
+    updateDebugPanel();
+    showError(`새 버전 ${targetVersion} 준비됨 · 지금은 리로드 보류`);
+    return;
+  }
   try {
     if (sessionStorage.getItem(SW_RELOAD_GUARD_KEY) === targetVersion) return;
     sessionStorage.setItem(SW_RELOAD_GUARD_KEY, targetVersion);
@@ -166,7 +178,8 @@ function setLoading(on, message = '문서를 여는 중…') {
 
 function updateDebugPanel() {
   if (!els.debugPanel || !els.debugWrap) return;
-  if (!currentFile) {
+  const shouldShow = DEBUG_SEARCH || !!currentFile;
+  if (!shouldShow) {
     els.debugWrap.hidden = true;
     els.debugPanel.hidden = true;
     return;
@@ -179,6 +192,9 @@ function updateDebugPanel() {
   }));
   const payload = {
     debugEnabled: DEBUG_SEARCH,
+    hasCurrentFile: !!currentFile,
+    swVersion: SW_VERSION,
+    lastSwEvent,
     trimEnabled: ENABLE_SLOT_TRIM,
     page: currentPage + 1,
     pageCount,
