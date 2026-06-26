@@ -13,8 +13,8 @@ const SAFE_SVG_TAGS = new Set([
 const URL_ATTRS = new Set(['href', 'xlink:href']);
 const BAD_TAGS = new Set(['script', 'foreignObject', 'iframe', 'object', 'embed', 'audio', 'video', 'canvas']);
 const DEBUG_SEARCH = new URLSearchParams(location.search).get('debug') === '1' || location.hash.includes('debug');
-const ASSET_VERSION = '28';
-const SW_VERSION = 'hwp-viewer-v28';
+const ASSET_VERSION = '29';
+const SW_VERSION = 'hwp-viewer-v29';
 const SW_RELOAD_GUARD_KEY = 'hwp-viewer-sw-reload-version';
 
 const els = {
@@ -746,21 +746,37 @@ function findLayoutRunForMatch(match, layout, pageIndex, matchText) {
   const matchEnd = Number.isFinite(matchStart) && Number.isFinite(matchLength) ? matchStart + matchLength : null;
   if (!Number.isFinite(matchStart) || !Number.isFinite(matchEnd)) return null;
 
-  const exactCandidates = layout.runs.filter((run) => {
-    if (run.pageIndex != null && run.pageIndex !== pageIndex) return false;
-    if (match.sectionIndex != null && run.sectionIndex != null && run.sectionIndex !== match.sectionIndex) return false;
-    if (match.paragraphIndex != null && run.paragraphIndex != null && run.paragraphIndex !== match.paragraphIndex) return false;
-    if (!run.text?.includes(matchText)) return false;
+  const scored = [];
+  for (const run of layout.runs) {
+    if (run.pageIndex != null && run.pageIndex !== pageIndex) continue;
+    if (match.sectionIndex != null && run.sectionIndex != null && run.sectionIndex !== match.sectionIndex) continue;
+    const sameParagraph = match.paragraphIndex != null && run.paragraphIndex != null
+      ? run.paragraphIndex === match.paragraphIndex
+      : false;
     const charStart = pickRunCharStart(run);
     const charEnd = charStart + getRunCharLength(run);
-    return matchStart >= charStart && matchEnd <= charEnd;
-  });
+    const containsRange = matchStart >= charStart && matchEnd <= charEnd;
+    const textIncludes = !!run.text?.includes(matchText);
+    const distance = Math.abs(charStart - matchStart);
 
-  if (exactCandidates.length) {
-    return exactCandidates.sort((a, b) => pickRunCharStart(a) - pickRunCharStart(b))[0];
+    if (!sameParagraph && !containsRange && !textIncludes) continue;
+
+    let score = 0;
+    if (sameParagraph) score += 100;
+    if (containsRange) score += 80;
+    if (textIncludes) score += 40;
+    score -= Math.min(distance, 50);
+
+    scored.push({ run, score, charStart });
   }
 
-  return null;
+  if (!scored.length) return null;
+
+  scored.sort((a, b) => {
+    if (b.score !== a.score) return b.score - a.score;
+    return a.charStart - b.charStart;
+  });
+  return scored[0].run;
 }
 
 function refineRectWithTextRun(run, match, rect, matchText) {
