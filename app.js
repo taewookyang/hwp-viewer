@@ -13,8 +13,8 @@ const SAFE_SVG_TAGS = new Set([
 const URL_ATTRS = new Set(['href', 'xlink:href']);
 const BAD_TAGS = new Set(['script', 'foreignObject', 'iframe', 'object', 'embed', 'audio', 'video', 'canvas']);
 const DEBUG_SEARCH = new URLSearchParams(location.search).get('debug') === '1' || location.hash.includes('debug');
-const ASSET_VERSION = '27';
-const SW_VERSION = 'hwp-viewer-v27';
+const ASSET_VERSION = '28';
+const SW_VERSION = 'hwp-viewer-v28';
 const SW_RELOAD_GUARD_KEY = 'hwp-viewer-sw-reload-version';
 
 const els = {
@@ -61,6 +61,7 @@ const MIN_ZOOM = 0.75;
 const MAX_ZOOM = 2.5;
 const ZOOM_STEP = 0.25;
 let currentFile = null;
+let openingFile = null;
 let searchResults = [];
 let searchResultIndex = -1;
 let lastSearchQuery = '';
@@ -124,7 +125,7 @@ function showError(message) {
 
 function reloadForServiceWorker(version) {
   const targetVersion = typeof version === 'string' && version ? version : SW_VERSION;
-  const shouldDeferReload = DEBUG_SEARCH || !!currentFile || !!doc;
+  const shouldDeferReload = DEBUG_SEARCH || !!currentFile || !!openingFile || !!doc;
   lastSwEvent = {
     version: targetVersion,
     deferredReload: shouldDeferReload,
@@ -178,7 +179,7 @@ function setLoading(on, message = '문서를 여는 중…') {
 
 function updateDebugPanel() {
   if (!els.debugPanel || !els.debugWrap) return;
-  const shouldShow = DEBUG_SEARCH || !!currentFile;
+  const shouldShow = DEBUG_SEARCH || !!currentFile || !!openingFile;
   if (!shouldShow) {
     els.debugWrap.hidden = true;
     els.debugPanel.hidden = true;
@@ -193,6 +194,7 @@ function updateDebugPanel() {
   const payload = {
     debugEnabled: DEBUG_SEARCH,
     hasCurrentFile: !!currentFile,
+    openingFile: openingFile ? { name: openingFile.name, size: openingFile.size } : null,
     swVersion: SW_VERSION,
     lastSwEvent,
     trimEnabled: ENABLE_SLOT_TRIM,
@@ -1322,6 +1324,8 @@ async function openFile(file) {
     return;
   }
 
+  openingFile = file;
+  updateDebugPanel();
   setLoading(true, '문서를 읽는 중…');
   await nextPaint();
   try {
@@ -1339,6 +1343,7 @@ async function openFile(file) {
     }
 
     currentFile = file;
+    openingFile = null;
     doc = nextDoc;
     pageCount = nextPageCount;
     currentPage = 0;
@@ -1367,6 +1372,7 @@ async function openFile(file) {
     updateDebugPanel();
   } catch (error) {
     console.error(error);
+    openingFile = null;
     cleanupDocument();
     pageCount = 0;
     currentPage = 0;
@@ -1376,6 +1382,8 @@ async function openFile(file) {
     updatePager();
     showError('문서를 열 수 없습니다. 손상되었거나 아직 지원되지 않는 형식일 수 있습니다.');
   } finally {
+    openingFile = null;
+    updateDebugPanel();
     setLoading(false);
   }
 }

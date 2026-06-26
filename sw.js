@@ -1,6 +1,6 @@
 // hwp-viewer 서비스워커 — 오프라인 캐싱 (wasm 포함)
 // 캐시 버전을 올리면(v20→v21...) 기존 캐시를 비우고 새로 받습니다.
-const CACHE_NAME = 'hwp-viewer-v27';
+const CACHE_NAME = 'hwp-viewer-v28';
 
 // 오프라인에서도 동작하려면 이 파일들이 전부 캐시되어야 함
 // 특히 rhwp_bg.wasm 이 빠지면 파일 열기가 멈춤
