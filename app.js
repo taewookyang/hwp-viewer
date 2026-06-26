@@ -345,7 +345,8 @@ function normalizeSearchMatch(match, fallbackIndex = 0) {
   const charOffset = pickIntDeep(match, ['charOffset', 'char_offset', 'char', 'from_char', 'startCharOffset', 'start_char_offset']);
   const endParagraphIndex = pickIntDeep(match, ['endParagraphIndex', 'end_para', 'to_para', 'end_para_idx', 'toParaIndex']);
   const endCharOffset = pickIntDeep(match, ['endCharOffset', 'end_char_offset', 'to_char', 'matchEnd', 'match_end']);
-  const count = pickIntDeep(match, ['count', 'matchCount', 'match_count']) ?? 1;
+  const length = pickIntDeep(match, ['length', 'len', 'matchLength', 'match_length']);
+  const count = pickIntDeep(match, ['count', 'matchCount', 'match_count']) ?? length ?? 1;
   const pageIndex = normalizePageIndex(
     pickValueDeep(match, ['pageIndex', 'page', 'page_num', 'pageNum', 'globalPage', 'global_page']),
   ) ?? resolvePageIndexFromPosition(sectionIndex, paragraphIndex);
@@ -357,6 +358,7 @@ function normalizeSearchMatch(match, fallbackIndex = 0) {
     charOffset,
     endParagraphIndex,
     endCharOffset,
+    length,
     count,
     raw: match,
   };
@@ -406,12 +408,12 @@ function runSearch(rawQuery) {
   }
 
   searchResultIndex = searchResults.length ? 0 : -1;
-  debugState.currentMatch = getCurrentSearchMatch();
+  syncCurrentSearchMatch();
   updateSearchUi();
   updateDebugPanel();
   if (searchResults.length) {
-    const first = searchResults[0];
-    if (Number.isFinite(first.pageIndex)) {
+    const first = getCurrentSearchMatch();
+    if (Number.isFinite(first?.pageIndex)) {
       goToPage(first.pageIndex + 1);
     }
   }
@@ -428,11 +430,10 @@ function queueSearch(rawQuery, delay = 250) {
 function moveSearch(delta) {
   if (!searchResults.length) return;
   searchResultIndex = (searchResultIndex + delta + searchResults.length) % searchResults.length;
-  const current = searchResults[searchResultIndex];
-  debugState.currentMatch = current;
+  const current = syncCurrentSearchMatch();
   updateSearchUi();
   updateDebugPanel();
-  if (Number.isFinite(current.pageIndex)) {
+  if (Number.isFinite(current?.pageIndex)) {
     goToPage(current.pageIndex + 1);
   } else {
     renderCurrentPage();
@@ -447,7 +448,15 @@ function normalizeRectCandidate(rect) {
   const height = Number(rect.height ?? rect.h ?? ((rect.bottom ?? rect.y1) - (rect.top ?? rect.y0)));
   if (![x, y, width, height].every(Number.isFinite)) return null;
   if (width <= 0 || height <= 0) return null;
-  return { x, y, width, height };
+  return {
+    x,
+    y,
+    width,
+    height,
+    pageIndex: normalizePageIndex(
+      pickValueDeep(rect, ['pageIndex', 'page', 'page_num', 'pageNum', 'globalPage', 'global_page']),
+    ),
+  };
 }
 
 function collectRects(value, out = []) {
@@ -475,8 +484,11 @@ function resolveMatchEnd(match) {
   const startChar = match.charOffset;
   const endPara = match.endParagraphIndex ?? match.paragraphIndex;
   let endChar = match.endCharOffset;
-  if (endChar == null && startChar != null && lastSearchQuery) {
-    endChar = startChar + lastSearchQuery.length;
+  if (endChar == null && startChar != null) {
+    const span = match.length ?? match.count ?? lastSearchQuery.length;
+    if (Number.isFinite(span) && span > 0) {
+      endChar = startChar + span;
+    }
   }
   if (startPara == null || startChar == null || endPara == null || endChar == null) return null;
   return {
@@ -488,11 +500,10 @@ function resolveMatchEnd(match) {
   };
 }
 
-function computeSearchHighlightRects() {
-  const match = getCurrentSearchMatch();
-  if (!doc || !match) return [];
+function computeSearchHighlightData(match = getCurrentSearchMatch()) {
+  if (!doc || !match) return { rects: [], pageIndex: match?.pageIndex ?? null, raw: null };
   const range = resolveMatchEnd(match);
-  if (!range || range.sectionIndex == null) return [];
+  if (!range || range.sectionIndex == null) return { rects: [], pageIndex: match.pageIndex ?? null, raw: null };
   try {
     const raw = doc.getSelectionRects(
       range.sectionIndex,
@@ -503,15 +514,28 @@ function computeSearchHighlightRects() {
     );
     const parsed = tryParseJson(raw);
     const rects = collectRects(parsed);
+    const rectPageIndex = rects.find((rect) => Number.isFinite(rect.pageIndex))?.pageIndex ?? null;
     debugState.rawRects = parsed;
     debugState.rects = rects;
-    return rects;
+    return { rects, pageIndex: rectPageIndex ?? match.pageIndex ?? null, raw: parsed };
   } catch (error) {
     console.warn('검색 하이라이트 좌표 계산 실패', error);
     debugState.rawRects = { error: String(error) };
     debugState.rects = [];
-    return [];
+    return { rects: [], pageIndex: match.pageIndex ?? null, raw: { error: String(error) } };
   }
+}
+
+function syncCurrentSearchMatch() {
+  const match = getCurrentSearchMatch();
+  if (!match) return null;
+  const info = computeSearchHighlightData(match);
+  searchHighlightRects = info.rects;
+  if (Number.isFinite(info.pageIndex)) {
+    match.pageIndex = info.pageIndex;
+  }
+  debugState.currentMatch = match;
+  return match;
 }
 
 function getSvgViewBox(svg) {
@@ -534,12 +558,12 @@ function renderSearchHighlights() {
 
   els.pageContainer.querySelector('#search-highlight-layer')?.remove();
 
-  const match = getCurrentSearchMatch();
+  const match = syncCurrentSearchMatch();
   if (!match || match.pageIndex !== currentPage) return;
 
-  searchHighlightRects = computeSearchHighlightRects();
+  const pageRects = searchHighlightRects.filter((rect) => rect.pageIndex == null || rect.pageIndex === currentPage);
   updateDebugPanel();
-  if (!searchHighlightRects.length) return;
+  if (!pageRects.length) return;
 
   const viewBox = getSvgViewBox(svg);
   if (!viewBox) return;
@@ -552,7 +576,7 @@ function renderSearchHighlights() {
   layer.setAttribute('preserveAspectRatio', svg.getAttribute('preserveAspectRatio') || 'xMidYMid meet');
   layer.setAttribute('aria-hidden', 'true');
 
-  for (const rect of searchHighlightRects) {
+  for (const rect of pageRects) {
     const node = document.createElementNS('http://www.w3.org/2000/svg', 'rect');
     node.setAttribute('x', String(rect.x));
     node.setAttribute('y', String(rect.y));
