@@ -229,17 +229,29 @@ button, input {
   overflow: auto;
   padding: 16px 8px 90px;
   background: var(--viewer-bg);
-  display: flex;
-  justify-content: center;
-  align-items: flex-start;
 }
 #page-container {
   position: relative;
+  width: 100%;
+  max-width: min(100%, 1200px);
+  margin: 0 auto;
+}
+.page-slot {
+  position: relative;
+  width: 100%;
+  margin: 0 auto 16px;
+  min-height: 480px;
+}
+.page-slot:last-child {
+  margin-bottom: 0;
+}
+.page-slot-inner {
+  position: relative;
+  min-height: inherit;
   background: var(--paper-bg);
   box-shadow: var(--shadow);
   border-radius: 4px;
   overflow: hidden;
-  max-width: min(100%, 1200px);
 }
 #page-container svg {
   display: block;

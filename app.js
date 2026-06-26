@@ -63,10 +63,12 @@ let searchResultIndex = -1;
 let lastSearchQuery = '';
 let searchHighlightRects = [];
 let searchDebounceTimer = null;
-let touchStartX = null;
-let touchStartY = null;
 let errorTimer = null;
 let lastRenderedPage = null;
+let pageSlots = [];
+let pageAspectRatio = Math.sqrt(2);
+let pageSlotHeight = 0;
+let scrollSyncRaf = null;
 const pageTextLayoutCache = new Map();
 let debugState = {
   query: '',
@@ -188,6 +190,10 @@ function cleanupDocument() {
   doc = null;
   currentFile = null;
   lastRenderedPage = null;
+  pageSlots = [];
+  pageSlotHeight = 0;
+  scrollSyncRaf = null;
+  els.pageContainer.replaceChildren();
   pageTextLayoutCache.clear();
 }
 
@@ -224,6 +230,10 @@ function updateZoomUi() {
 function applyZoom() {
   els.pageContainer.style.width = `${Math.round(currentZoom * 100)}%`;
   updateZoomUi();
+  requestAnimationFrame(() => {
+    updatePageSlotHeights();
+    syncCurrentPageFromViewport();
+  });
 }
 
 function setZoom(nextZoom) {
@@ -936,22 +946,134 @@ function updatePager() {
   els.nextBtn.disabled = !pageCount || currentPage >= pageCount - 1;
 }
 
-function renderCurrentPage() {
-  if (!doc || pageCount < 1) return false;
+function getApproxPageWidth() {
+  const wrapWidth = els.viewerWrap.clientWidth || els.pageContainer.clientWidth || 360;
+  return Math.max(240, Math.min(1200, wrapWidth * currentZoom));
+}
+
+function updatePageAspectRatioFromSvg(svg) {
+  const viewBox = getSvgViewBox(svg);
+  if (!viewBox) return;
+  const width = viewBox[2];
+  const height = viewBox[3];
+  if (Number.isFinite(width) && Number.isFinite(height) && width > 0 && height > 0) {
+    pageAspectRatio = height / width;
+  }
+}
+
+function computePageSlotHeight() {
+  const width = getApproxPageWidth();
+  return Math.max(320, Math.round(width * pageAspectRatio));
+}
+
+function updatePageSlotHeights() {
+  const nextHeight = computePageSlotHeight();
+  pageSlotHeight = nextHeight;
+  for (const slot of pageSlots) {
+    slot.style.minHeight = `${nextHeight}px`;
+  }
+}
+
+function createPageSlot(pageIndex) {
+  const slot = document.createElement('div');
+  slot.className = 'page-slot';
+  slot.dataset.pageIndex = String(pageIndex);
+  const inner = document.createElement('div');
+  inner.className = 'page-slot-inner';
+  slot.appendChild(inner);
+  return slot;
+}
+
+function buildPageStack() {
+  pageSlots = [];
+  els.pageContainer.replaceChildren();
+  for (let i = 0; i < pageCount; i += 1) {
+    const slot = createPageSlot(i);
+    pageSlots.push(slot);
+    els.pageContainer.appendChild(slot);
+  }
+  updatePageSlotHeights();
+}
+
+function getPageSlot(pageIndex) {
+  return Number.isFinite(pageIndex) ? pageSlots[pageIndex] ?? null : null;
+}
+
+function renderPageIntoSlot(pageIndex) {
+  if (!doc || pageIndex < 0 || pageIndex >= pageCount) return false;
+  const slot = getPageSlot(pageIndex);
+  if (!slot) return false;
   try {
-    const svgText = doc.renderPageSvg(currentPage);
+    const svgText = doc.renderPageSvg(pageIndex);
     const safeSvg = sanitizeSvg(svgText);
-    els.pageContainer.replaceChildren(safeSvg);
-    renderSearchHighlights();
-    updatePager();
-    els.viewerWrap.scrollTop = 0;
-    lastRenderedPage = currentPage;
+    updatePageAspectRatioFromSvg(safeSvg);
+    const inner = slot.firstElementChild ?? slot;
+    inner.replaceChildren(safeSvg);
+    slot.dataset.rendered = '1';
+    updatePageSlotHeights();
+    lastRenderedPage = pageIndex;
     return true;
   } catch (error) {
     console.error(error);
     showError('페이지를 안전하게 표시하지 못했습니다.');
     return false;
   }
+}
+
+function renderAllPages() {
+  for (let i = 0; i < pageCount; i += 1) {
+    renderPageIntoSlot(i);
+  }
+}
+
+function findPageClosestToViewportCenter() {
+  if (!pageSlots.length) return null;
+  const wrapRect = els.viewerWrap.getBoundingClientRect();
+  const centerY = wrapRect.top + (wrapRect.height / 2);
+  let bestIndex = 0;
+  let bestDistance = Number.POSITIVE_INFINITY;
+  for (let i = 0; i < pageSlots.length; i += 1) {
+    const rect = pageSlots[i].getBoundingClientRect();
+    const slotCenter = rect.top + (rect.height / 2);
+    const distance = Math.abs(slotCenter - centerY);
+    if (distance < bestDistance) {
+      bestDistance = distance;
+      bestIndex = i;
+    }
+  }
+  return bestIndex;
+}
+
+function syncCurrentPageFromViewport() {
+  const nextIndex = findPageClosestToViewportCenter();
+  if (!Number.isFinite(nextIndex)) return;
+  if (nextIndex !== currentPage) {
+    currentPage = nextIndex;
+  }
+  updatePager();
+}
+
+function queueViewportSync() {
+  if (scrollSyncRaf != null) return;
+  scrollSyncRaf = requestAnimationFrame(() => {
+    scrollSyncRaf = null;
+    syncCurrentPageFromViewport();
+  });
+}
+
+function goToPage(pageNumber, options = {}) {
+  if (!pageCount) return false;
+  const requestedPage = Number(pageNumber);
+  if (!Number.isFinite(requestedPage)) return false;
+  const nextPage = Math.max(1, Math.min(pageCount, Math.trunc(requestedPage)));
+  const nextIndex = nextPage - 1;
+  const slot = getPageSlot(nextIndex);
+  if (!slot) return false;
+  const behavior = options.behavior ?? 'smooth';
+  currentPage = nextIndex;
+  updatePager();
+  slot.scrollIntoView({ block: 'start', behavior });
+  return true;
 }
 
 function validateFile(file) {
@@ -1006,7 +1128,10 @@ async function openFile(file) {
 
     setLoading(true, '첫 페이지를 그리는 중…');
     await nextPaint();
-    goToPage(1);
+    buildPageStack();
+    renderAllPages();
+    goToPage(1, { behavior: 'auto' });
+    syncCurrentPageFromViewport();
   } catch (error) {
     console.error(error);
     cleanupDocument();
@@ -1062,9 +1187,8 @@ function registerEvents() {
     event.target.value = '';
   });
 
-  els.prevBtn.addEventListener('click', () => goToPage(currentPage));
-
-  els.nextBtn.addEventListener('click', () => goToPage(currentPage + 2));
+  els.prevBtn.addEventListener('click', () => goToPage(currentPage, { behavior: 'smooth' }));
+  els.nextBtn.addEventListener('click', () => goToPage(currentPage + 2, { behavior: 'smooth' }));
 
   els.pageInput.addEventListener('keydown', (event) => {
     if (event.key === 'Enter') {
@@ -1094,29 +1218,11 @@ function registerEvents() {
     copyDebugPayload();
   });
 
-  els.viewerWrap.addEventListener('touchstart', (event) => {
-    touchStartX = event.touches[0]?.clientX ?? null;
-    touchStartY = event.touches[0]?.clientY ?? null;
-  }, { passive: true });
-
-  els.viewerWrap.addEventListener('touchend', (event) => {
-    if (touchStartX == null || touchStartY == null || !pageCount) return;
-    const endX = event.changedTouches[0]?.clientX;
-    const endY = event.changedTouches[0]?.clientY;
-    if (typeof endX !== 'number' || typeof endY !== 'number') return;
-    const dx = endX - touchStartX;
-    const dy = endY - touchStartY;
-    if (Math.abs(dx) > 60 && Math.abs(dx) > Math.abs(dy) * 1.2) {
-      if (dx < 0 && currentPage < pageCount - 1) {
-        goToPage(currentPage + 2);
-      } else if (dx > 0 && currentPage > 0) {
-        goToPage(currentPage);
-      }
-    }
-    touchStartX = null;
-    touchStartY = null;
-  }, { passive: true });
-
+  els.viewerWrap.addEventListener('scroll', queueViewportSync, { passive: true });
+  window.addEventListener('resize', () => {
+    updatePageSlotHeights();
+    queueViewportSync();
+  });
   window.addEventListener('beforeunload', cleanupDocument);
 }
 
