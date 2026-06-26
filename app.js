@@ -384,6 +384,7 @@ function normalizeSearchMatch(match, fallbackIndex = 0) {
   const length = pickIntDeep(match, ['length', 'len', 'matchLength', 'match_length']);
   const count = pickIntDeep(match, ['count', 'matchCount', 'match_count']) ?? length ?? 1;
   const pageIndex = extractNormalizedPageIndex(match) ?? resolvePageIndexFromPosition(sectionIndex, paragraphIndex);
+  const cellContext = pickValueDeep(match, ['cellContext', 'cell_context', 'cell']);
   return {
     key: String(match.id ?? match.key ?? `${sectionIndex ?? 'x'}-${paragraphIndex ?? 'x'}-${charOffset ?? fallbackIndex}`),
     pageIndex,
@@ -394,6 +395,7 @@ function normalizeSearchMatch(match, fallbackIndex = 0) {
     endCharOffset,
     length,
     count,
+    cellContext,
     raw: match,
   };
 }
@@ -559,9 +561,11 @@ function normalizeTextRunCandidate(run) {
   const height = Number(run.height ?? run.h ?? run.lineHeight ?? run.bboxHeight ?? run.fontSize);
   const width = boundaries[boundaries.length - 1] - boundaries[0];
   const pageIndex = extractNormalizedPageIndex(run);
+  const sectionIndex = pickIntDeep(run, ['sectionIndex', 'section', 'section_idx', 'sec']);
   const paragraphIndex = pickIntDeep(run, ['paragraphIndex', 'paraIdx', 'para_idx', 'para']);
+  const charStart = pickIntDeep(run, ['startCharOffset', 'start_char_offset', 'charStart', 'char_start', 'runStartCharOffset', 'run_start_char_offset']);
   if (![x, y, height].every(Number.isFinite) || height <= 0 || width <= 0) return null;
-  return { text, boundaries, x, y, width, height, pageIndex, paragraphIndex, raw: run };
+  return { text, boundaries, x, y, width, height, pageIndex, sectionIndex, paragraphIndex, charStart, raw: run };
 }
 
 function collectTextRuns(value, out = [], seen = new Set()) {
@@ -596,24 +600,6 @@ function getPageTextLayoutData(pageIndex) {
   }
 }
 
-function getMatchSelectionText(range) {
-  if (!doc || !range) return null;
-  try {
-    const raw = doc.copySelection(
-      range.sectionIndex,
-      range.startParaIndex,
-      range.startCharOffset,
-      range.endParaIndex,
-      range.endCharOffset,
-    );
-    const parsed = tryParseJson(raw);
-    if (typeof parsed?.text === 'string' && parsed.text.length) return parsed.text;
-  } catch (error) {
-    console.warn('선택 텍스트 조회 실패', error);
-  }
-  return lastSearchQuery || null;
-}
-
 function findOccurrenceIndexes(text, query) {
   if (!text || !query) return [];
   const out = [];
@@ -627,45 +613,58 @@ function findOccurrenceIndexes(text, query) {
   return out;
 }
 
-function scoreRunCandidate(run, rect, matchText, match) {
-  let score = 0;
-  if (run.paragraphIndex != null && match?.paragraphIndex != null && run.paragraphIndex === match.paragraphIndex) score += 1000;
-  if (matchText && run.text.includes(matchText)) score += 200;
-  const rectCenterY = rect.y + rect.height / 2;
-  const runCenterY = run.y + run.height / 2;
-  score -= Math.abs(rectCenterY - runCenterY) * 4;
-  const rectCenterX = rect.x + rect.width / 2;
-  const runCenterX = run.x + run.width / 2;
-  score -= Math.abs(rectCenterX - runCenterX) * 0.4;
-  score -= Math.abs(rect.width - run.width) * 0.05;
-  return score;
+function pickRunCharStart(run) {
+  if (Number.isFinite(run?.charStart)) return run.charStart;
+  return 0;
 }
 
-function refineRectWithTextRun(run, rect, matchText) {
-  const occurrences = findOccurrenceIndexes(run.text, matchText);
-  if (!occurrences.length) return null;
-  let best = null;
-  let bestDistance = Infinity;
-  const targetX = rect.x + Math.min(rect.width / 2, 24);
-  for (const startIndex of occurrences) {
-    const endIndex = startIndex + matchText.length;
-    const x0 = run.boundaries[startIndex];
-    const x1 = run.boundaries[endIndex];
-    if (![x0, x1].every(Number.isFinite) || x1 <= x0) continue;
-    const center = (x0 + x1) / 2;
-    const distance = Math.abs(center - targetX);
-    if (distance < bestDistance) {
-      bestDistance = distance;
-      best = {
-        x: x0,
-        y: run.y,
-        width: x1 - x0,
-        height: run.height,
-        pageIndex: rect.pageIndex,
-      };
-    }
+function getRunCharLength(run) {
+  if (!run) return 0;
+  return Math.min(run.text?.length ?? 0, Math.max(0, (run.boundaries?.length ?? 0) - 1));
+}
+
+function findLayoutRunForMatch(match, layout, pageIndex, matchText) {
+  if (!match || !layout?.runs?.length || !matchText) return null;
+  if (match.cellContext) return null;
+  const matchLength = match.length ?? match.count ?? matchText.length;
+  const matchStart = match.charOffset;
+  const matchEnd = Number.isFinite(matchStart) && Number.isFinite(matchLength) ? matchStart + matchLength : null;
+  if (!Number.isFinite(matchStart) || !Number.isFinite(matchEnd)) return null;
+
+  const exactCandidates = layout.runs.filter((run) => {
+    if (run.pageIndex != null && run.pageIndex !== pageIndex) return false;
+    if (match.sectionIndex != null && run.sectionIndex != null && run.sectionIndex !== match.sectionIndex) return false;
+    if (match.paragraphIndex != null && run.paragraphIndex != null && run.paragraphIndex !== match.paragraphIndex) return false;
+    if (!run.text?.includes(matchText)) return false;
+    const charStart = pickRunCharStart(run);
+    const charEnd = charStart + getRunCharLength(run);
+    return matchStart >= charStart && matchEnd <= charEnd;
+  });
+
+  if (exactCandidates.length) {
+    return exactCandidates.sort((a, b) => pickRunCharStart(a) - pickRunCharStart(b))[0];
   }
-  return best;
+
+  return null;
+}
+
+function refineRectWithTextRun(run, match, rect, matchText) {
+  if (!run || !matchText) return null;
+  const charStart = pickRunCharStart(run);
+  const relativeStart = (match.charOffset ?? 0) - charStart;
+  const matchLength = match.length ?? match.count ?? matchText.length;
+  const relativeEnd = relativeStart + matchLength;
+  if (!Number.isFinite(relativeStart) || !Number.isFinite(relativeEnd)) return null;
+  const x0 = run.boundaries?.[relativeStart];
+  const x1 = run.boundaries?.[relativeEnd];
+  if (![x0, x1].every(Number.isFinite) || x1 <= x0) return null;
+  return {
+    x: run.x + x0,
+    y: run.y,
+    width: x1 - x0,
+    height: run.height,
+    pageIndex: rect.pageIndex,
+  };
 }
 
 function refineRectsWithTextLayout(match, rects, pageIndex, matchText) {
@@ -684,31 +683,32 @@ function refineRectsWithTextLayout(match, rects, pageIndex, matchText) {
     debugState.layoutCandidateRuns = [];
     return null;
   }
+  if (match.cellContext) {
+    debugState.layoutCandidateRuns = [{ fallback: 'cell-context' }];
+    return null;
+  }
   const refined = [];
-  const candidateDebug = [];
+  const chosenRuns = [];
   for (const rect of rects) {
-    const candidates = layout.runs
-      .filter((run) => (run.pageIndex == null || run.pageIndex === pageIndex) && run.text.includes(matchText))
-      .map((run) => ({ run, score: scoreRunCandidate(run, rect, matchText, match) }))
-      .sort((a, b) => b.score - a.score);
-    candidateDebug.push(candidates.slice(0, 5).map(({ run, score }) => ({
-      score,
-      pageIndex: run.pageIndex,
-      paragraphIndex: run.paragraphIndex,
-      text: run.text,
-      x: run.x,
-      y: run.y,
-      width: run.width,
-      height: run.height,
-      boundariesPreview: run.boundaries.slice(0, Math.min(run.boundaries.length, 12)),
-      boundaryCount: run.boundaries.length,
-    })));
-    const chosen = candidates[0]?.run;
-    const improved = chosen ? refineRectWithTextRun(chosen, rect, matchText) : null;
+    const chosen = findLayoutRunForMatch(match, layout, pageIndex, matchText);
+    chosenRuns.push(chosen ? {
+      pageIndex: chosen.pageIndex,
+      sectionIndex: chosen.sectionIndex,
+      paragraphIndex: chosen.paragraphIndex,
+      charStart: chosen.charStart,
+      text: chosen.text,
+      x: chosen.x,
+      y: chosen.y,
+      width: chosen.width,
+      height: chosen.height,
+      boundariesPreview: chosen.boundaries.slice(0, Math.min(chosen.boundaries.length, 12)),
+      boundaryCount: chosen.boundaries.length,
+    } : { fallback: 'no-run-match' });
+    const improved = chosen ? refineRectWithTextRun(chosen, match, rect, matchText) : null;
     refined.push(improved ?? rect);
   }
-  debugState.layoutCandidateRuns = candidateDebug;
-  return refined;
+  debugState.layoutCandidateRuns = chosenRuns;
+  return refined.some((rect, index) => rect !== rects[index]) ? refined : null;
 }
 
 function getCurrentSearchMatch() {
