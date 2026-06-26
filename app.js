@@ -313,12 +313,29 @@ function pickValueDeep(source, keys, seen = new Set()) {
   return null;
 }
 
-function normalizePageIndex(value) {
+function normalizeZeroBasedPageIndex(value) {
   const num = toInt(value);
   if (num == null) return null;
-  if (num >= 1 && num <= pageCount) return num - 1;
-  if (num >= 0 && num < pageCount) return num;
-  return null;
+  return num >= 0 && num < pageCount ? num : null;
+}
+
+function normalizeOneBasedPageNumber(value) {
+  const num = toInt(value);
+  if (num == null) return null;
+  return num >= 1 && num <= pageCount ? num - 1 : null;
+}
+
+function normalizePageIndex(value) {
+  return normalizeZeroBasedPageIndex(value) ?? normalizeOneBasedPageNumber(value);
+}
+
+function extractNormalizedPageIndex(source) {
+  if (!source || typeof source !== 'object') return null;
+  return normalizeZeroBasedPageIndex(
+    pickValueDeep(source, ['pageIndex', 'globalPage', 'global_page']),
+  ) ?? normalizeOneBasedPageNumber(
+    pickValueDeep(source, ['page', 'page_num', 'pageNum']),
+  );
 }
 
 function resolvePageIndexFromPosition(sectionIndex, paragraphIndex) {
@@ -329,9 +346,7 @@ function resolvePageIndexFromPosition(sectionIndex, paragraphIndex) {
     if (typeof parsed === 'number' || typeof parsed === 'string') {
       return normalizePageIndex(parsed);
     }
-    return normalizePageIndex(
-      pickValueDeep(parsed, ['pageIndex', 'page', 'pageNum', 'globalPage', 'global_page']),
-    );
+    return extractNormalizedPageIndex(parsed);
   } catch (error) {
     console.warn('검색 결과 페이지 매핑 실패', error);
     return null;
@@ -347,9 +362,7 @@ function normalizeSearchMatch(match, fallbackIndex = 0) {
   const endCharOffset = pickIntDeep(match, ['endCharOffset', 'end_char_offset', 'to_char', 'matchEnd', 'match_end']);
   const length = pickIntDeep(match, ['length', 'len', 'matchLength', 'match_length']);
   const count = pickIntDeep(match, ['count', 'matchCount', 'match_count']) ?? length ?? 1;
-  const pageIndex = normalizePageIndex(
-    pickValueDeep(match, ['pageIndex', 'page', 'page_num', 'pageNum', 'globalPage', 'global_page']),
-  ) ?? resolvePageIndexFromPosition(sectionIndex, paragraphIndex);
+  const pageIndex = extractNormalizedPageIndex(match) ?? resolvePageIndexFromPosition(sectionIndex, paragraphIndex);
   return {
     key: String(match.id ?? match.key ?? `${sectionIndex ?? 'x'}-${paragraphIndex ?? 'x'}-${charOffset ?? fallbackIndex}`),
     pageIndex,
@@ -453,9 +466,7 @@ function normalizeRectCandidate(rect) {
     y,
     width,
     height,
-    pageIndex: normalizePageIndex(
-      pickValueDeep(rect, ['pageIndex', 'page', 'page_num', 'pageNum', 'globalPage', 'global_page']),
-    ),
+    pageIndex: extractNormalizedPageIndex(rect),
   };
 }
 
