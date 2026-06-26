@@ -12,6 +12,7 @@ const SAFE_SVG_TAGS = new Set([
 ]);
 const URL_ATTRS = new Set(['href', 'xlink:href']);
 const BAD_TAGS = new Set(['script', 'foreignObject', 'iframe', 'object', 'embed', 'audio', 'video', 'canvas']);
+const DEBUG_SEARCH = new URLSearchParams(location.search).get('debug') === '1';
 
 const els = {
   openBtn: document.getElementById('openBtn'),
@@ -43,6 +44,7 @@ const els = {
   loading: document.getElementById('loading'),
   loadingText: document.getElementById('loadingText'),
   errorBox: document.getElementById('errorBox'),
+  debugPanel: document.getElementById('debugPanel'),
 };
 
 let doc = null;
@@ -62,6 +64,14 @@ let searchDebounceTimer = null;
 let touchStartX = null;
 let touchStartY = null;
 let errorTimer = null;
+let debugState = {
+  query: '',
+  rawSearch: null,
+  normalizedResults: [],
+  currentMatch: null,
+  rawRects: null,
+  rects: [],
+};
 
 function setTheme(theme) {
   document.documentElement.dataset.theme = theme;
@@ -93,6 +103,28 @@ function showError(message) {
 function setLoading(on, message = '문서를 여는 중…') {
   els.loading.hidden = !on;
   els.loadingText.textContent = message;
+}
+
+function updateDebugPanel() {
+  if (!els.debugPanel) return;
+  if (!DEBUG_SEARCH) {
+    els.debugPanel.hidden = true;
+    return;
+  }
+  els.debugPanel.hidden = false;
+  const payload = {
+    page: currentPage + 1,
+    pageCount,
+    query: debugState.query,
+    resultCount: searchResults.length,
+    resultIndex: searchResultIndex,
+    currentMatch: debugState.currentMatch,
+    rectCount: debugState.rects?.length ?? 0,
+    rects: debugState.rects,
+    rawSearch: debugState.rawSearch,
+    rawRects: debugState.rawRects,
+  };
+  els.debugPanel.textContent = JSON.stringify(payload, null, 2);
 }
 
 function nextPaint() {
@@ -170,8 +202,17 @@ function resetSearchState({ keepInput = false } = {}) {
   searchResultIndex = -1;
   lastSearchQuery = '';
   searchHighlightRects = [];
+  debugState = {
+    query: '',
+    rawSearch: null,
+    normalizedResults: [],
+    currentMatch: null,
+    rawRects: null,
+    rects: [],
+  };
   if (!keepInput) els.searchInput.value = '';
   updateSearchUi();
+  updateDebugPanel();
 }
 
 function updateSearchUi() {
@@ -313,18 +354,23 @@ function searchViaEngine(rawQuery) {
   if (!matches) {
     throw new Error('searchAllText returned unsupported payload');
   }
-  return matches
+  const normalized = matches
     .map((match, index) => normalizeSearchMatch(match, index))
     .filter(Boolean);
+  debugState.rawSearch = parsed;
+  debugState.normalizedResults = normalized;
+  return normalized;
 }
 
 function runSearch(rawQuery) {
   const query = rawQuery.trim();
   lastSearchQuery = query;
+  debugState.query = query;
   if (!query) {
     searchResults = [];
     searchResultIndex = -1;
     updateSearchUi();
+    updateDebugPanel();
     return;
   }
 
@@ -337,7 +383,9 @@ function runSearch(rawQuery) {
   }
 
   searchResultIndex = searchResults.length ? 0 : -1;
+  debugState.currentMatch = getCurrentSearchMatch();
   updateSearchUi();
+  updateDebugPanel();
   if (searchResults.length) {
     const first = searchResults[0];
     if (Number.isFinite(first.pageIndex)) {
@@ -358,7 +406,9 @@ function moveSearch(delta) {
   if (!searchResults.length) return;
   searchResultIndex = (searchResultIndex + delta + searchResults.length) % searchResults.length;
   const current = searchResults[searchResultIndex];
+  debugState.currentMatch = current;
   updateSearchUi();
+  updateDebugPanel();
   if (Number.isFinite(current.pageIndex)) {
     goToPage(current.pageIndex + 1);
   } else {
@@ -429,9 +479,14 @@ function computeSearchHighlightRects() {
       range.endCharOffset,
     );
     const parsed = tryParseJson(raw);
-    return collectRects(parsed);
+    const rects = collectRects(parsed);
+    debugState.rawRects = parsed;
+    debugState.rects = rects;
+    return rects;
   } catch (error) {
     console.warn('검색 하이라이트 좌표 계산 실패', error);
+    debugState.rawRects = { error: String(error) };
+    debugState.rects = [];
     return [];
   }
 }
@@ -460,6 +515,7 @@ function renderSearchHighlights() {
   if (!match || match.pageIndex !== currentPage) return;
 
   searchHighlightRects = computeSearchHighlightRects();
+  updateDebugPanel();
   if (!searchHighlightRects.length) return;
 
   const viewBox = getSvgViewBox(svg);
@@ -756,6 +812,7 @@ async function boot() {
   updateDocMeta();
   updateZoomUi();
   updateSearchUi();
+  updateDebugPanel();
   registerEvents();
   await clearServiceWorkers();
 }

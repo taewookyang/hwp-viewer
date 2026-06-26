@@ -154,6 +154,19 @@ button, input {
   display: none;
 }
 #errorBox.show { display: block; }
+#debugPanel {
+  margin: 8px 16px 0;
+  padding: 10px 12px;
+  border-radius: 10px;
+  border: 1px solid var(--border);
+  background: color-mix(in srgb, var(--surface) 96%, transparent);
+  color: var(--text);
+  font: 11px/1.45 ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+  white-space: pre-wrap;
+  word-break: break-word;
+  max-height: 32vh;
+  overflow: auto;
+}
 #toolbar {
   position: sticky;
   top: calc(63px + env(safe-area-inset-top));
