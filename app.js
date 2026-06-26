@@ -940,6 +940,21 @@ function isSafeUrl(value) {
   return true;
 }
 
+function hasUnsafeCssUrl(cssText) {
+  if (!cssText) return false;
+  const matches = cssText.match(/url\(([^)]+)\)/gi) || [];
+  for (const raw of matches) {
+    const inner = raw.slice(4, -1).trim().replace(/^['"]|['"]$/g, '');
+    const lower = inner.toLowerCase();
+    if (!inner) continue;
+    if (inner.startsWith('#')) continue;
+    if (lower.startsWith('data:')) continue;
+    if (lower.startsWith('javascript:')) return true;
+    if (lower.startsWith('http:') || lower.startsWith('https:') || lower.startsWith('//')) return true;
+  }
+  return false;
+}
+
 function sanitizeSvg(svgText) {
   const parser = new DOMParser();
   const parsed = parser.parseFromString(svgText, 'image/svg+xml');
@@ -959,7 +974,7 @@ function sanitizeSvg(svgText) {
 
     if (tag === 'style') {
       const css = node.textContent || '';
-      if (/@import|url\s*\(|expression\s*\(/i.test(css)) {
+      if (/@import|expression\s*\(/i.test(css) || hasUnsafeCssUrl(css)) {
         node.remove();
         return;
       }
@@ -980,7 +995,7 @@ function sanitizeSvg(svgText) {
         }
         continue;
       }
-      if (lower === 'style' && /url\s*\(/i.test(value)) {
+      if (lower === 'style' && hasUnsafeCssUrl(value)) {
         node.removeAttribute(name);
       }
     }
@@ -1104,8 +1119,15 @@ function renderPageIntoSlot(pageIndex, options = {}) {
   try {
     const svgText = doc.renderPageSvg(pageIndex);
     const safeSvg = sanitizeSvg(svgText);
-    updatePageAspectRatioFromSvg(safeSvg);
+    const drawableCount = safeSvg.querySelectorAll('path, rect, circle, ellipse, line, polyline, polygon, text, image, use').length;
     const inner = slot.firstElementChild ?? slot;
+    if (!drawableCount) {
+      inner.replaceChildren();
+      slot.dataset.rendered = '0';
+      showError(`페이지 ${pageIndex + 1} 렌더 결과가 비어 있습니다. 문서별 SVG 호환성 문제를 점검 중입니다.`);
+      return false;
+    }
+    updatePageAspectRatioFromSvg(safeSvg);
     inner.replaceChildren(safeSvg);
     slot.dataset.rendered = '1';
     touchRenderedSlot(pageIndex);
@@ -1362,7 +1384,7 @@ function registerEvents() {
 function registerServiceWorker() {
   if (!('serviceWorker' in navigator)) return;
   window.addEventListener('load', () => {
-    navigator.serviceWorker.register('./sw.js?v=22');
+    navigator.serviceWorker.register('./sw.js?v=23');
   });
 }
 
