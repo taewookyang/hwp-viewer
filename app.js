@@ -19,6 +19,15 @@ const els = {
   themeBtn: document.getElementById('themeBtn'),
   fileInput: document.getElementById('fileInput'),
   title: document.getElementById('title'),
+  docMeta: document.getElementById('docMeta'),
+  docType: document.getElementById('docType'),
+  docSize: document.getElementById('docSize'),
+  docPages: document.getElementById('docPages'),
+  toolbar: document.getElementById('toolbar'),
+  zoomOutBtn: document.getElementById('zoomOutBtn'),
+  zoomResetBtn: document.getElementById('zoomResetBtn'),
+  zoomInBtn: document.getElementById('zoomInBtn'),
+  zoomLabel: document.getElementById('zoomLabel'),
   empty: document.getElementById('empty'),
   viewerWrap: document.getElementById('viewer-wrap'),
   pageContainer: document.getElementById('page-container'),
@@ -36,6 +45,11 @@ let doc = null;
 let currentPage = 0;
 let pageCount = 0;
 let wasmReady = false;
+let currentZoom = 1;
+const MIN_ZOOM = 0.75;
+const MAX_ZOOM = 2.5;
+const ZOOM_STEP = 0.25;
+let currentFile = null;
 let touchStartX = null;
 let touchStartY = null;
 let errorTimer = null;
@@ -94,6 +108,52 @@ function cleanupDocument() {
     }
   }
   doc = null;
+  currentFile = null;
+}
+
+function formatFileSize(size) {
+  if (!Number.isFinite(size) || size < 0) return '-';
+  if (size < 1024) return `${size}B`;
+  if (size < 1024 * 1024) return `${(size / 1024).toFixed(size < 10 * 1024 ? 1 : 0)}KB`;
+  return `${(size / (1024 * 1024)).toFixed(size < 10 * 1024 * 1024 ? 1 : 0)}MB`;
+}
+
+function updateDocMeta() {
+  if (!currentFile) {
+    els.docMeta.hidden = true;
+    els.docType.textContent = '-';
+    els.docSize.textContent = '-';
+    els.docPages.textContent = '-';
+    return;
+  }
+  const ext = currentFile.name.split('.').pop()?.toUpperCase() || '-';
+  els.docType.textContent = ext;
+  els.docSize.textContent = formatFileSize(currentFile.size);
+  els.docPages.textContent = pageCount ? `${pageCount}페이지` : '페이지 미확인';
+  els.docMeta.hidden = false;
+}
+
+function updateZoomUi() {
+  const zoomText = `${Math.round(currentZoom * 100)}%`;
+  els.zoomLabel.textContent = zoomText;
+  els.zoomResetBtn.textContent = zoomText;
+  els.zoomOutBtn.disabled = currentZoom <= MIN_ZOOM;
+  els.zoomInBtn.disabled = currentZoom >= MAX_ZOOM;
+}
+
+function applyZoom() {
+  els.pageContainer.style.width = `${Math.round(currentZoom * 100)}%`;
+  updateZoomUi();
+}
+
+function setZoom(nextZoom) {
+  const clamped = Math.max(MIN_ZOOM, Math.min(MAX_ZOOM, Number(nextZoom) || 1));
+  currentZoom = Math.round(clamped * 100) / 100;
+  applyZoom();
+}
+
+function resetZoom() {
+  setZoom(1);
 }
 
 function isSafeUrl(value) {
@@ -213,15 +273,19 @@ async function openFile(file) {
       throw new Error('페이지 정보를 읽지 못했습니다.');
     }
 
+    currentFile = file;
     doc = nextDoc;
     pageCount = nextPageCount;
     currentPage = 0;
 
     els.title.textContent = file.name;
     els.title.classList.remove('placeholder');
+    updateDocMeta();
+    resetZoom();
     els.empty.hidden = true;
     els.viewerWrap.hidden = false;
     els.bottombar.hidden = false;
+    els.toolbar.hidden = false;
 
     setLoading(true, '첫 페이지를 그리는 중…');
     await nextPaint();
@@ -231,6 +295,8 @@ async function openFile(file) {
     cleanupDocument();
     pageCount = 0;
     currentPage = 0;
+    els.toolbar.hidden = true;
+    updateDocMeta();
     updatePager();
     showError('문서를 열 수 없습니다. 손상되었거나 아직 지원되지 않는 형식일 수 있습니다.');
   } finally {
@@ -294,6 +360,10 @@ function registerEvents() {
   });
   els.pageInput.addEventListener('blur', handlePageInputCommit);
 
+  els.zoomOutBtn.addEventListener('click', () => setZoom(currentZoom - ZOOM_STEP));
+  els.zoomResetBtn.addEventListener('click', resetZoom);
+  els.zoomInBtn.addEventListener('click', () => setZoom(currentZoom + ZOOM_STEP));
+
   els.viewerWrap.addEventListener('touchstart', (event) => {
     touchStartX = event.touches[0]?.clientX ?? null;
     touchStartY = event.touches[0]?.clientY ?? null;
@@ -336,6 +406,8 @@ async function boot() {
   setLoading(false);
   initTheme();
   updatePager();
+  updateDocMeta();
+  updateZoomUi();
   registerEvents();
   await clearServiceWorkers();
 }
