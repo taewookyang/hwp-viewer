@@ -220,6 +220,35 @@ function pickInt(source, keys) {
   return null;
 }
 
+function pickIntDeep(source, keys, seen = new Set()) {
+  if (!source || typeof source !== 'object' || seen.has(source)) return null;
+  seen.add(source);
+  const direct = pickInt(source, keys);
+  if (direct != null) return direct;
+  for (const child of Object.values(source)) {
+    if (child && typeof child === 'object') {
+      const nested = pickIntDeep(child, keys, seen);
+      if (nested != null) return nested;
+    }
+  }
+  return null;
+}
+
+function pickValueDeep(source, keys, seen = new Set()) {
+  if (!source || typeof source !== 'object' || seen.has(source)) return null;
+  seen.add(source);
+  for (const key of keys) {
+    if (source[key] != null) return source[key];
+  }
+  for (const child of Object.values(source)) {
+    if (child && typeof child === 'object') {
+      const nested = pickValueDeep(child, keys, seen);
+      if (nested != null) return nested;
+    }
+  }
+  return null;
+}
+
 function normalizePageIndex(value) {
   const num = toInt(value);
   if (num == null) return null;
@@ -237,7 +266,7 @@ function resolvePageIndexFromPosition(sectionIndex, paragraphIndex) {
       return normalizePageIndex(parsed);
     }
     return normalizePageIndex(
-      parsed?.pageIndex ?? parsed?.page ?? parsed?.pageNum ?? parsed?.globalPage ?? parsed?.global_page,
+      pickValueDeep(parsed, ['pageIndex', 'page', 'pageNum', 'globalPage', 'global_page']),
     );
   } catch (error) {
     console.warn('검색 결과 페이지 매핑 실패', error);
@@ -247,14 +276,14 @@ function resolvePageIndexFromPosition(sectionIndex, paragraphIndex) {
 
 function normalizeSearchMatch(match, fallbackIndex = 0) {
   if (!match || typeof match !== 'object') return null;
-  const sectionIndex = pickInt(match, ['sectionIndex', 'section', 'section_idx', 'sec', 'from_sec']);
-  const paragraphIndex = pickInt(match, ['paragraphIndex', 'paragraph', 'paraIndex', 'para_idx', 'para', 'from_para']);
-  const charOffset = pickInt(match, ['charOffset', 'char_offset', 'char', 'from_char', 'startCharOffset', 'start_char_offset']);
-  const endParagraphIndex = pickInt(match, ['endParagraphIndex', 'end_para', 'to_para', 'end_para_idx', 'toParaIndex']);
-  const endCharOffset = pickInt(match, ['endCharOffset', 'end_char_offset', 'to_char', 'matchEnd', 'match_end']);
-  const count = pickInt(match, ['count', 'matchCount', 'match_count']) ?? 1;
+  const sectionIndex = pickIntDeep(match, ['sectionIndex', 'section', 'section_idx', 'sec', 'from_sec']);
+  const paragraphIndex = pickIntDeep(match, ['paragraphIndex', 'paragraph', 'paraIndex', 'para_idx', 'para', 'from_para']);
+  const charOffset = pickIntDeep(match, ['charOffset', 'char_offset', 'char', 'from_char', 'startCharOffset', 'start_char_offset']);
+  const endParagraphIndex = pickIntDeep(match, ['endParagraphIndex', 'end_para', 'to_para', 'end_para_idx', 'toParaIndex']);
+  const endCharOffset = pickIntDeep(match, ['endCharOffset', 'end_char_offset', 'to_char', 'matchEnd', 'match_end']);
+  const count = pickIntDeep(match, ['count', 'matchCount', 'match_count']) ?? 1;
   const pageIndex = normalizePageIndex(
-    match.pageIndex ?? match.page ?? match.page_num ?? match.pageNum ?? match.globalPage ?? match.global_page,
+    pickValueDeep(match, ['pageIndex', 'page', 'page_num', 'pageNum', 'globalPage', 'global_page']),
   ) ?? resolvePageIndexFromPosition(sectionIndex, paragraphIndex);
   return {
     key: String(match.id ?? match.key ?? `${sectionIndex ?? 'x'}-${paragraphIndex ?? 'x'}-${charOffset ?? fallbackIndex}`),
