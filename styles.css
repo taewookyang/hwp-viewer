@@ -204,6 +204,7 @@ button, input {
   align-items: flex-start;
 }
 #page-container {
+  position: relative;
   background: var(--paper-bg);
   box-shadow: var(--shadow);
   border-radius: 4px;
@@ -215,6 +216,18 @@ button, input {
   width: 100%;
   height: auto;
   background: var(--paper-bg);
+}
+.search-highlight-layer {
+  position: absolute;
+  inset: 0;
+  width: 100%;
+  height: 100%;
+  pointer-events: none;
+}
+.search-highlight-rect {
+  fill: rgba(255, 225, 82, 0.38);
+  stroke: rgba(255, 179, 0, 0.92);
+  stroke-width: 1.2;
 }
 #bottombar {
   position: fixed;

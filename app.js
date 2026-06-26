@@ -57,6 +57,7 @@ let currentFile = null;
 let searchResults = [];
 let searchResultIndex = -1;
 let lastSearchQuery = '';
+let searchHighlightRects = [];
 let searchDebounceTimer = null;
 let touchStartX = null;
 let touchStartY = null;
@@ -168,6 +169,7 @@ function resetSearchState({ keepInput = false } = {}) {
   searchResults = [];
   searchResultIndex = -1;
   lastSearchQuery = '';
+  searchHighlightRects = [];
   if (!keepInput) els.searchInput.value = '';
   updateSearchUi();
 }
@@ -248,6 +250,7 @@ function normalizeSearchMatch(match, fallbackIndex = 0) {
   const sectionIndex = pickInt(match, ['sectionIndex', 'section', 'section_idx', 'sec', 'from_sec']);
   const paragraphIndex = pickInt(match, ['paragraphIndex', 'paragraph', 'paraIndex', 'para_idx', 'para', 'from_para']);
   const charOffset = pickInt(match, ['charOffset', 'char_offset', 'char', 'from_char', 'startCharOffset', 'start_char_offset']);
+  const endParagraphIndex = pickInt(match, ['endParagraphIndex', 'end_para', 'to_para', 'end_para_idx', 'toParaIndex']);
   const endCharOffset = pickInt(match, ['endCharOffset', 'end_char_offset', 'to_char', 'matchEnd', 'match_end']);
   const count = pickInt(match, ['count', 'matchCount', 'match_count']) ?? 1;
   const pageIndex = normalizePageIndex(
@@ -259,6 +262,7 @@ function normalizeSearchMatch(match, fallbackIndex = 0) {
     sectionIndex,
     paragraphIndex,
     charOffset,
+    endParagraphIndex,
     endCharOffset,
     count,
     raw: match,
@@ -328,7 +332,131 @@ function moveSearch(delta) {
   updateSearchUi();
   if (Number.isFinite(current.pageIndex)) {
     goToPage(current.pageIndex + 1);
+  } else {
+    renderCurrentPage();
   }
+}
+
+function normalizeRectCandidate(rect) {
+  if (!rect || typeof rect !== 'object') return null;
+  const x = Number(rect.x ?? rect.left ?? rect.x0 ?? rect.l ?? rect.cx);
+  const y = Number(rect.y ?? rect.top ?? rect.y0 ?? rect.t ?? rect.cy);
+  const width = Number(rect.width ?? rect.w ?? ((rect.right ?? rect.x1) - (rect.left ?? rect.x0)));
+  const height = Number(rect.height ?? rect.h ?? ((rect.bottom ?? rect.y1) - (rect.top ?? rect.y0)));
+  if (![x, y, width, height].every(Number.isFinite)) return null;
+  if (width <= 0 || height <= 0) return null;
+  return { x, y, width, height };
+}
+
+function collectRects(value, out = []) {
+  if (value == null) return out;
+  if (Array.isArray(value)) {
+    for (const item of value) collectRects(item, out);
+    return out;
+  }
+  if (typeof value !== 'object') return out;
+  const rect = normalizeRectCandidate(value);
+  if (rect) out.push(rect);
+  for (const child of Object.values(value)) {
+    if (child && typeof child === 'object') collectRects(child, out);
+  }
+  return out;
+}
+
+function getCurrentSearchMatch() {
+  if (searchResultIndex < 0 || searchResultIndex >= searchResults.length) return null;
+  return searchResults[searchResultIndex] ?? null;
+}
+
+function resolveMatchEnd(match) {
+  const startPara = match.paragraphIndex;
+  const startChar = match.charOffset;
+  const endPara = match.endParagraphIndex ?? match.paragraphIndex;
+  let endChar = match.endCharOffset;
+  if (endChar == null && startChar != null && lastSearchQuery) {
+    endChar = startChar + lastSearchQuery.length;
+  }
+  if (startPara == null || startChar == null || endPara == null || endChar == null) return null;
+  return {
+    sectionIndex: match.sectionIndex,
+    startParaIndex: startPara,
+    startCharOffset: startChar,
+    endParaIndex: endPara,
+    endCharOffset: endChar,
+  };
+}
+
+function computeSearchHighlightRects() {
+  const match = getCurrentSearchMatch();
+  if (!doc || !match) return [];
+  const range = resolveMatchEnd(match);
+  if (!range || range.sectionIndex == null) return [];
+  try {
+    const raw = doc.getSelectionRects(
+      range.sectionIndex,
+      range.startParaIndex,
+      range.startCharOffset,
+      range.endParaIndex,
+      range.endCharOffset,
+    );
+    const parsed = tryParseJson(raw);
+    return collectRects(parsed);
+  } catch (error) {
+    console.warn('검색 하이라이트 좌표 계산 실패', error);
+    return [];
+  }
+}
+
+function getSvgViewBox(svg) {
+  const viewBox = svg.getAttribute('viewBox');
+  if (viewBox) {
+    const nums = viewBox.split(/[\s,]+/).map(Number).filter(Number.isFinite);
+    if (nums.length === 4) return nums;
+  }
+  const width = Number(svg.getAttribute('width'));
+  const height = Number(svg.getAttribute('height'));
+  if (Number.isFinite(width) && Number.isFinite(height) && width > 0 && height > 0) {
+    return [0, 0, width, height];
+  }
+  return null;
+}
+
+function renderSearchHighlights() {
+  const svg = els.pageContainer.querySelector('svg');
+  if (!svg) return;
+
+  els.pageContainer.querySelector('#search-highlight-layer')?.remove();
+
+  const match = getCurrentSearchMatch();
+  if (!match || match.pageIndex !== currentPage) return;
+
+  searchHighlightRects = computeSearchHighlightRects();
+  if (!searchHighlightRects.length) return;
+
+  const viewBox = getSvgViewBox(svg);
+  if (!viewBox) return;
+
+  const [minX, minY, width, height] = viewBox;
+  const layer = document.createElementNS('http://www.w3.org/2000/svg', 'svg');
+  layer.setAttribute('id', 'search-highlight-layer');
+  layer.setAttribute('class', 'search-highlight-layer');
+  layer.setAttribute('viewBox', `${minX} ${minY} ${width} ${height}`);
+  layer.setAttribute('preserveAspectRatio', svg.getAttribute('preserveAspectRatio') || 'xMidYMid meet');
+  layer.setAttribute('aria-hidden', 'true');
+
+  for (const rect of searchHighlightRects) {
+    const node = document.createElementNS('http://www.w3.org/2000/svg', 'rect');
+    node.setAttribute('x', String(rect.x));
+    node.setAttribute('y', String(rect.y));
+    node.setAttribute('width', String(rect.width));
+    node.setAttribute('height', String(rect.height));
+    node.setAttribute('rx', '2');
+    node.setAttribute('ry', '2');
+    node.setAttribute('class', 'search-highlight-rect');
+    layer.appendChild(node);
+  }
+
+  els.pageContainer.appendChild(layer);
 }
 
 function isSafeUrl(value) {
@@ -405,6 +533,7 @@ function renderCurrentPage() {
     const svgText = doc.renderPageSvg(currentPage);
     const safeSvg = sanitizeSvg(svgText);
     els.pageContainer.replaceChildren(safeSvg);
+    renderSearchHighlights();
     updatePager();
     els.viewerWrap.scrollTop = 0;
   } catch (error) {
