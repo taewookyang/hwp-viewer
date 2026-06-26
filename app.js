@@ -12,7 +12,7 @@ const SAFE_SVG_TAGS = new Set([
 ]);
 const URL_ATTRS = new Set(['href', 'xlink:href']);
 const BAD_TAGS = new Set(['script', 'foreignObject', 'iframe', 'object', 'embed', 'audio', 'video', 'canvas']);
-const DEBUG_SEARCH = new URLSearchParams(location.search).get('debug') === '1';
+const DEBUG_SEARCH = new URLSearchParams(location.search).get('debug') === '1' || location.hash.includes('debug');
 
 const els = {
   openBtn: document.getElementById('openBtn'),
@@ -71,6 +71,7 @@ let pageSlotHeight = 0;
 let scrollSyncRaf = null;
 let slotObserver = null;
 const renderedSlotAccess = new Map();
+const ENABLE_SLOT_TRIM = false;
 const MAX_RENDERED_SLOTS = 5;
 const MAX_LAYOUT_CACHE = 8;
 const SLOT_PRERENDER_RADIUS = 1;
@@ -136,6 +137,8 @@ function updateDebugPanel() {
     rendered: getPageSlot(pageIndex)?.dataset.rendered === '1',
   }));
   const payload = {
+    debugEnabled: DEBUG_SEARCH,
+    trimEnabled: ENABLE_SLOT_TRIM,
     page: currentPage + 1,
     pageCount,
     scrollTop: Math.round(els.viewerWrap?.scrollTop ?? 0),
@@ -1074,6 +1077,7 @@ function clearPageSlot(pageIndex) {
 }
 
 function trimRenderedSlots(preserve = getPreservedPageIndexes(currentPage)) {
+  if (!ENABLE_SLOT_TRIM) return;
   if (renderedSlotAccess.size <= MAX_RENDERED_SLOTS) return;
   const candidates = [...renderedSlotAccess.entries()]
     .filter(([pageIndex]) => !preserve.has(pageIndex))
@@ -1252,9 +1256,12 @@ async function openFile(file) {
     setLoading(true, '첫 페이지를 그리는 중…');
     await nextPaint();
     buildPageStack();
+    els.viewerWrap.scrollTop = 0;
     ensurePagesAround(0, SLOT_PRERENDER_RADIUS + 1);
     refreshSlotObserver();
     goToPage(1, { behavior: 'auto' });
+    els.viewerWrap.scrollTop = 0;
+    await nextPaint();
     syncCurrentPageFromViewport();
   } catch (error) {
     console.error(error);
@@ -1355,7 +1362,7 @@ function registerEvents() {
 function registerServiceWorker() {
   if (!('serviceWorker' in navigator)) return;
   window.addEventListener('load', () => {
-    navigator.serviceWorker.register('./sw.js');
+    navigator.serviceWorker.register('./sw.js?v=22');
   });
 }
 
