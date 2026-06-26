@@ -72,6 +72,12 @@ function setLoading(on, message = '문서를 여는 중…') {
   els.loadingText.textContent = message;
 }
 
+function nextPaint() {
+  return new Promise((resolve) => {
+    requestAnimationFrame(() => setTimeout(resolve, 0));
+  });
+}
+
 async function ensureWasm() {
   if (wasmReady) return;
   setLoading(true, '뷰어 엔진을 준비하는 중…');
@@ -192,9 +198,11 @@ async function openFile(file) {
   }
 
   setLoading(true, '문서를 읽는 중…');
+  await nextPaint();
   try {
     await ensureWasm();
     setLoading(true, '문서를 분석하는 중…');
+    await nextPaint();
     cleanupDocument();
 
     const buf = new Uint8Array(await file.arrayBuffer());
@@ -216,6 +224,7 @@ async function openFile(file) {
     els.bottombar.hidden = false;
 
     setLoading(true, '첫 페이지를 그리는 중…');
+    await nextPaint();
     renderCurrentPage();
   } catch (error) {
     console.error(error);
