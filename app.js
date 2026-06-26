@@ -76,6 +76,10 @@ let debugState = {
   rawRects: null,
   rects: [],
   rectSource: null,
+  layoutPageIndex: null,
+  layoutRunCount: 0,
+  layoutRawSample: null,
+  layoutCandidateRuns: [],
 };
 
 function setTheme(theme) {
@@ -138,6 +142,10 @@ function updateDebugPanel() {
     rects: debugState.rects,
     rawSearch: debugState.rawSearch,
     rawRects: debugState.rawRects,
+    layoutPageIndex: debugState.layoutPageIndex,
+    layoutRunCount: debugState.layoutRunCount,
+    layoutRawSample: debugState.layoutRawSample,
+    layoutCandidateRuns: debugState.layoutCandidateRuns,
   };
   els.debugPanel.textContent = JSON.stringify(payload, null, 2);
 }
@@ -240,6 +248,10 @@ function resetSearchState({ keepInput = false } = {}) {
     rawRects: null,
     rects: [],
     rectSource: null,
+    layoutPageIndex: null,
+    layoutRunCount: 0,
+    layoutRawSample: null,
+    layoutCandidateRuns: [],
   };
   pageTextLayoutCache.clear();
   if (!keepInput) els.searchInput.value = '';
@@ -657,19 +669,45 @@ function refineRectWithTextRun(run, rect, matchText) {
 }
 
 function refineRectsWithTextLayout(match, rects, pageIndex, matchText) {
-  if (!rects.length || !matchText || !Number.isFinite(pageIndex)) return null;
+  if (!rects.length || !matchText || !Number.isFinite(pageIndex)) {
+    debugState.layoutPageIndex = pageIndex ?? null;
+    debugState.layoutRunCount = 0;
+    debugState.layoutRawSample = null;
+    debugState.layoutCandidateRuns = [];
+    return null;
+  }
   const layout = getPageTextLayoutData(pageIndex);
-  if (!layout?.runs?.length) return null;
+  debugState.layoutPageIndex = pageIndex;
+  debugState.layoutRunCount = layout?.runs?.length ?? 0;
+  debugState.layoutRawSample = layout?.raw ?? null;
+  if (!layout?.runs?.length) {
+    debugState.layoutCandidateRuns = [];
+    return null;
+  }
   const refined = [];
+  const candidateDebug = [];
   for (const rect of rects) {
     const candidates = layout.runs
       .filter((run) => (run.pageIndex == null || run.pageIndex === pageIndex) && run.text.includes(matchText))
       .map((run) => ({ run, score: scoreRunCandidate(run, rect, matchText, match) }))
       .sort((a, b) => b.score - a.score);
+    candidateDebug.push(candidates.slice(0, 5).map(({ run, score }) => ({
+      score,
+      pageIndex: run.pageIndex,
+      paragraphIndex: run.paragraphIndex,
+      text: run.text,
+      x: run.x,
+      y: run.y,
+      width: run.width,
+      height: run.height,
+      boundariesPreview: run.boundaries.slice(0, Math.min(run.boundaries.length, 12)),
+      boundaryCount: run.boundaries.length,
+    })));
     const chosen = candidates[0]?.run;
     const improved = chosen ? refineRectWithTextRun(chosen, rect, matchText) : null;
     refined.push(improved ?? rect);
   }
+  debugState.layoutCandidateRuns = candidateDebug;
   return refined;
 }
 
@@ -715,10 +753,9 @@ function computeSearchHighlightData(match = getCurrentSearchMatch()) {
     const rects = collectRects(parsed);
     const rectPageIndex = rects.find((rect) => Number.isFinite(rect.pageIndex))?.pageIndex ?? null;
     const pageIndex = rectPageIndex ?? match.pageIndex ?? null;
-    const selectionText = getMatchSelectionText(range);
-    const refinedRects = refineRectsWithTextLayout(match, rects, pageIndex, selectionText);
+    const refinedRects = refineRectsWithTextLayout(match, rects, pageIndex, lastSearchQuery);
     debugState.rawRects = parsed;
-    debugState.selectedText = selectionText;
+    debugState.selectedText = null;
     debugState.rects = refinedRects ?? rects;
     debugState.rectSource = refinedRects ? 'layout-refined' : 'engine-selection-rects';
     return { rects: refinedRects ?? rects, pageIndex, raw: parsed };
@@ -728,6 +765,10 @@ function computeSearchHighlightData(match = getCurrentSearchMatch()) {
     debugState.selectedText = null;
     debugState.rects = [];
     debugState.rectSource = 'error';
+    debugState.layoutPageIndex = null;
+    debugState.layoutRunCount = 0;
+    debugState.layoutRawSample = null;
+    debugState.layoutCandidateRuns = [];
     return { rects: [], pageIndex: match.pageIndex ?? null, raw: { error: String(error) } };
   }
 }
