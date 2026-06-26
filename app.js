@@ -737,19 +737,49 @@ function resolveMatchEnd(match) {
   };
 }
 
-function computeSearchHighlightData(match = getCurrentSearchMatch()) {
-  if (!doc || !match) return { rects: [], pageIndex: match?.pageIndex ?? null, raw: null };
-  const range = resolveMatchEnd(match);
-  if (!range || range.sectionIndex == null) return { rects: [], pageIndex: match.pageIndex ?? null, raw: null };
-  try {
-    const raw = doc.getSelectionRects(
+function getSelectionRectsForMatch(match, range) {
+  if (!doc || !match || !range) return null;
+  const cell = match.cellContext;
+  if (cell && typeof cell === 'object') {
+    const parentPara = pickIntDeep(cell, ['parentPara', 'parent_para', 'parentParagraphIndex', 'parentParaIndex']);
+    const ctrlIdx = pickIntDeep(cell, ['ctrlIdx', 'ctrl_idx', 'controlIdx', 'control_idx']);
+    const cellIdx = pickIntDeep(cell, ['cellIdx', 'cell_idx']);
+    const cellPara = pickIntDeep(cell, ['cellPara', 'cell_para', 'cellParagraphIndex', 'cellParaIndex']);
+    if ([range.sectionIndex, parentPara, ctrlIdx, cellIdx, cellPara, range.startCharOffset, range.endCharOffset].every(Number.isFinite)) {
+      return {
+        raw: doc.getSelectionRectsInCell(
+          range.sectionIndex,
+          parentPara,
+          ctrlIdx,
+          cellIdx,
+          cellPara,
+          range.startCharOffset,
+          cellPara,
+          range.endCharOffset,
+        ),
+        source: 'engine-selection-rects-in-cell',
+      };
+    }
+  }
+  return {
+    raw: doc.getSelectionRects(
       range.sectionIndex,
       range.startParaIndex,
       range.startCharOffset,
       range.endParaIndex,
       range.endCharOffset,
-    );
-    const parsed = tryParseJson(raw);
+    ),
+    source: 'engine-selection-rects',
+  };
+}
+
+function computeSearchHighlightData(match = getCurrentSearchMatch()) {
+  if (!doc || !match) return { rects: [], pageIndex: match?.pageIndex ?? null, raw: null };
+  const range = resolveMatchEnd(match);
+  if (!range || range.sectionIndex == null) return { rects: [], pageIndex: match.pageIndex ?? null, raw: null };
+  try {
+    const selection = getSelectionRectsForMatch(match, range);
+    const parsed = tryParseJson(selection?.raw);
     const rects = collectRects(parsed);
     const rectPageIndex = rects.find((rect) => Number.isFinite(rect.pageIndex))?.pageIndex ?? null;
     const pageIndex = rectPageIndex ?? match.pageIndex ?? null;
@@ -757,7 +787,7 @@ function computeSearchHighlightData(match = getCurrentSearchMatch()) {
     debugState.rawRects = parsed;
     debugState.selectedText = null;
     debugState.rects = refinedRects ?? rects;
-    debugState.rectSource = refinedRects ? 'layout-refined' : 'engine-selection-rects';
+    debugState.rectSource = refinedRects ? 'layout-refined' : (selection?.source ?? 'engine-selection-rects');
     return { rects: refinedRects ?? rects, pageIndex, raw: parsed };
   } catch (error) {
     console.warn('검색 하이라이트 좌표 계산 실패', error);
