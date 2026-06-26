@@ -322,19 +322,22 @@ function registerEvents() {
   window.addEventListener('beforeunload', cleanupDocument);
 }
 
-function registerServiceWorker() {
+async function clearServiceWorkers() {
   if (!('serviceWorker' in navigator)) return;
-  navigator.serviceWorker.register('./sw.js').catch((error) => {
-    console.warn('서비스워커 등록 실패', error);
-  });
+  try {
+    const regs = await navigator.serviceWorker.getRegistrations();
+    await Promise.all(regs.map((reg) => reg.unregister()));
+  } catch (error) {
+    console.warn('서비스워커 해제 실패', error);
+  }
 }
 
-function boot() {
+async function boot() {
   setLoading(false);
   initTheme();
   updatePager();
   registerEvents();
-  registerServiceWorker();
+  await clearServiceWorkers();
 }
 
 boot();
