@@ -44,7 +44,9 @@ const els = {
   loading: document.getElementById('loading'),
   loadingText: document.getElementById('loadingText'),
   errorBox: document.getElementById('errorBox'),
+  debugWrap: document.getElementById('debugWrap'),
   debugPanel: document.getElementById('debugPanel'),
+  debugCopyBtn: document.getElementById('debugCopyBtn'),
 };
 
 let doc = null;
@@ -106,11 +108,19 @@ function setLoading(on, message = '문서를 여는 중…') {
 }
 
 function updateDebugPanel() {
-  if (!els.debugPanel) return;
-  if (!DEBUG_SEARCH) {
+  if (!els.debugPanel || !els.debugWrap) return;
+  const hasDebugPayload = Boolean(currentFile) && (
+    Boolean(debugState.query) ||
+    debugState.rawSearch != null ||
+    debugState.rawRects != null ||
+    searchResults.length > 0
+  );
+  if (!DEBUG_SEARCH || !hasDebugPayload) {
+    els.debugWrap.hidden = true;
     els.debugPanel.hidden = true;
     return;
   }
+  els.debugWrap.hidden = false;
   els.debugPanel.hidden = false;
   const payload = {
     page: currentPage + 1,
@@ -125,6 +135,19 @@ function updateDebugPanel() {
     rawRects: debugState.rawRects,
   };
   els.debugPanel.textContent = JSON.stringify(payload, null, 2);
+}
+
+async function copyDebugPayload() {
+  if (!els.debugPanel?.textContent) {
+    showError('복사할 진단 정보가 아직 없습니다.');
+    return;
+  }
+  try {
+    await navigator.clipboard.writeText(els.debugPanel.textContent);
+    showError('진단 정보를 복사했습니다.');
+  } catch {
+    showError('복사에 실패했습니다. 스크린샷으로 보내주세요.');
+  }
 }
 
 function nextPaint() {
@@ -766,6 +789,12 @@ function registerEvents() {
   els.searchInput.addEventListener('search', () => runSearch(els.searchInput.value));
   els.searchPrevBtn.addEventListener('click', () => moveSearch(-1));
   els.searchNextBtn.addEventListener('click', () => moveSearch(1));
+  els.debugCopyBtn?.addEventListener('click', () => {
+    copyDebugPayload();
+  });
+
+  els.prevBtn.addEventListener('click', () => goToPage(currentPage));
+  els.nextBtn.addEventListener('click', () => goToPage(currentPage + 2));
 
   els.viewerWrap.addEventListener('touchstart', (event) => {
     touchStartX = event.touches[0]?.clientX ?? null;
