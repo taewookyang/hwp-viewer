@@ -1350,14 +1350,11 @@ function registerEvents() {
   window.addEventListener('beforeunload', cleanupDocument);
 }
 
-async function clearServiceWorkers() {
+function registerServiceWorker() {
   if (!('serviceWorker' in navigator)) return;
-  try {
-    const regs = await navigator.serviceWorker.getRegistrations();
-    await Promise.all(regs.map((reg) => reg.unregister()));
-  } catch (error) {
-    console.warn('서비스워커 해제 실패', error);
-  }
+  window.addEventListener('load', () => {
+    navigator.serviceWorker.register('./sw.js');
+  });
 }
 
 async function boot() {
@@ -1369,7 +1366,7 @@ async function boot() {
   updateSearchUi();
   updateDebugPanel();
   registerEvents();
-  await clearServiceWorkers();
+  registerServiceWorker();
 }
 
 boot();
