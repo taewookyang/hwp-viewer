@@ -13,6 +13,9 @@ const SAFE_SVG_TAGS = new Set([
 const URL_ATTRS = new Set(['href', 'xlink:href']);
 const BAD_TAGS = new Set(['script', 'foreignObject', 'iframe', 'object', 'embed', 'audio', 'video', 'canvas']);
 const DEBUG_SEARCH = new URLSearchParams(location.search).get('debug') === '1' || location.hash.includes('debug');
+const ASSET_VERSION = '26';
+const SW_VERSION = 'hwp-viewer-v26';
+const SW_RELOAD_GUARD_KEY = 'hwp-viewer-sw-reload-version';
 
 const els = {
   openBtn: document.getElementById('openBtn'),
@@ -116,6 +119,44 @@ function showError(message) {
   els.errorBox.textContent = message;
   els.errorBox.classList.add('show');
   errorTimer = setTimeout(() => els.errorBox.classList.remove('show'), 4500);
+}
+
+function reloadForServiceWorker(version) {
+  const targetVersion = typeof version === 'string' && version ? version : SW_VERSION;
+  try {
+    if (sessionStorage.getItem(SW_RELOAD_GUARD_KEY) === targetVersion) return;
+    sessionStorage.setItem(SW_RELOAD_GUARD_KEY, targetVersion);
+  } catch {
+    if (window.__swReloadVersion === targetVersion) return;
+    window.__swReloadVersion = targetVersion;
+  }
+  location.reload();
+}
+
+function registerServiceWorkerLifecycle(registration) {
+  navigator.serviceWorker.addEventListener('message', (event) => {
+    const data = event.data;
+    if (!data || data.type !== 'SW_ACTIVATED') return;
+    reloadForServiceWorker(data.version);
+  });
+
+  navigator.serviceWorker.addEventListener('controllerchange', () => {
+    reloadForServiceWorker(SW_VERSION);
+  });
+
+  if (registration?.waiting) {
+    registration.waiting.postMessage({ type: 'SKIP_WAITING' });
+  }
+
+  registration?.addEventListener('updatefound', () => {
+    const installing = registration.installing;
+    if (!installing) return;
+    installing.addEventListener('statechange', () => {
+      if (installing.state === 'installed' && navigator.serviceWorker.controller) {
+        registration.waiting?.postMessage({ type: 'SKIP_WAITING' });
+      }
+    });
+  });
 }
 
 function setLoading(on, message = '문서를 여는 중…') {
@@ -1407,7 +1448,11 @@ function registerEvents() {
 function registerServiceWorker() {
   if (!('serviceWorker' in navigator)) return;
   window.addEventListener('load', () => {
-    navigator.serviceWorker.register('./sw.js?v=25');
+    navigator.serviceWorker.register(`./sw.js?v=${ASSET_VERSION}`).then((registration) => {
+      registerServiceWorkerLifecycle(registration);
+    }).catch((error) => {
+      console.error('서비스워커 등록 실패', error);
+    });
   });
 }
 
