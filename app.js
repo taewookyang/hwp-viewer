@@ -275,6 +275,7 @@ function resetSearchState({ keepInput = false } = {}) {
   };
   pageTextLayoutCache.clear();
   if (!keepInput) els.searchInput.value = '';
+  renderSearchHighlights({ match: null, skipEnsureRendered: true });
   updateSearchUi();
   updateDebugPanel();
 }
@@ -451,6 +452,7 @@ function runSearch(rawQuery) {
     searchResults = [];
     searchResultIndex = -1;
     updateSearchUi();
+    renderSearchHighlights({ match: null, skipEnsureRendered: true });
     updateDebugPanel();
     return;
   }
@@ -470,7 +472,7 @@ function runSearch(rawQuery) {
   if (searchResults.length) {
     const first = getCurrentSearchMatch();
     if (Number.isFinite(first?.pageIndex)) {
-      goToPage(first.pageIndex + 1);
+      goToPage(first.pageIndex + 1, { behavior: 'auto' });
     }
   }
 }
@@ -490,7 +492,7 @@ function moveSearch(delta) {
   updateSearchUi();
   updateDebugPanel();
   if (Number.isFinite(current?.pageIndex)) {
-    goToPage(current.pageIndex + 1);
+    goToPage(current.pageIndex + 1, { behavior: 'auto' });
   }
 }
 
@@ -857,31 +859,20 @@ function getSvgViewBox(svg) {
   return null;
 }
 
-function renderSearchHighlights() {
-  const svg = els.pageContainer.querySelector('svg');
-  if (!svg) return;
+function removeSearchHighlightLayers(scope = els.pageContainer) {
+  scope.querySelectorAll('.search-highlight-layer').forEach((node) => node.remove());
+}
 
-  els.pageContainer.querySelector('#search-highlight-layer')?.remove();
-
-  const match = syncCurrentSearchMatch();
-  if (!match || match.pageIndex !== currentPage) return;
-
-  const pageRects = searchHighlightRects.filter((rect) => rect.pageIndex == null || rect.pageIndex === currentPage);
-  updateDebugPanel();
-  if (!pageRects.length) return;
-
+function buildSearchHighlightLayer(svg, rects) {
   const viewBox = getSvgViewBox(svg);
-  if (!viewBox) return;
-
+  if (!viewBox || !rects.length) return null;
   const [minX, minY, width, height] = viewBox;
   const layer = document.createElementNS('http://www.w3.org/2000/svg', 'svg');
-  layer.setAttribute('id', 'search-highlight-layer');
   layer.setAttribute('class', 'search-highlight-layer');
   layer.setAttribute('viewBox', `${minX} ${minY} ${width} ${height}`);
   layer.setAttribute('preserveAspectRatio', svg.getAttribute('preserveAspectRatio') || 'xMidYMid meet');
   layer.setAttribute('aria-hidden', 'true');
-
-  for (const rect of pageRects) {
+  for (const rect of rects) {
     const node = document.createElementNS('http://www.w3.org/2000/svg', 'rect');
     node.setAttribute('x', String(rect.x));
     node.setAttribute('y', String(rect.y));
@@ -892,8 +883,49 @@ function renderSearchHighlights() {
     node.setAttribute('class', 'search-highlight-rect');
     layer.appendChild(node);
   }
+  return layer;
+}
 
-  els.pageContainer.appendChild(layer);
+function renderSearchHighlightsForPage(pageIndex, pageRects) {
+  const slot = getPageSlot(pageIndex);
+  if (!slot) return;
+  removeSearchHighlightLayers(slot);
+  if (!pageRects?.length) return;
+  const svg = slot.querySelector('svg');
+  const inner = slot.firstElementChild ?? slot;
+  if (!svg || !inner) return;
+  const layer = buildSearchHighlightLayer(svg, pageRects);
+  if (!layer) return;
+  inner.appendChild(layer);
+}
+
+function renderSearchHighlights(options = {}) {
+  removeSearchHighlightLayers();
+  const match = Object.prototype.hasOwnProperty.call(options, 'match') ? options.match : syncCurrentSearchMatch();
+  updateDebugPanel();
+  if (!match) return;
+  const fallbackPageIndex = Number.isFinite(match.pageIndex) ? match.pageIndex : currentPage;
+  const pageRectsByPage = new Map();
+  for (const rect of searchHighlightRects) {
+    const rectPageIndex = Number.isFinite(rect.pageIndex) ? rect.pageIndex : fallbackPageIndex;
+    if (!Number.isFinite(rectPageIndex)) continue;
+    if (!pageRectsByPage.has(rectPageIndex)) pageRectsByPage.set(rectPageIndex, []);
+    pageRectsByPage.get(rectPageIndex).push(rect);
+  }
+  if (!options.skipEnsureRendered) {
+    for (const pageIndex of pageRectsByPage.keys()) {
+      const slot = getPageSlot(pageIndex);
+      if (slot?.dataset.rendered !== '1') {
+        renderPageIntoSlot(pageIndex, { skipHighlight: true });
+      }
+    }
+  }
+  for (const [pageIndex, rects] of pageRectsByPage.entries()) {
+    const slot = getPageSlot(pageIndex);
+    if (slot?.dataset.rendered === '1') {
+      renderSearchHighlightsForPage(pageIndex, rects);
+    }
+  }
 }
 
 function isSafeUrl(value) {
@@ -1034,6 +1066,7 @@ function clearPageSlot(pageIndex) {
   const slot = getPageSlot(pageIndex);
   if (!slot) return;
   const inner = slot.firstElementChild ?? slot;
+  removeSearchHighlightLayers(slot);
   inner.replaceChildren();
   slot.dataset.rendered = '0';
   renderedSlotAccess.delete(pageIndex);
@@ -1054,12 +1087,13 @@ function trimRenderedSlots(preserve = getPreservedPageIndexes(currentPage)) {
   }
 }
 
-function renderPageIntoSlot(pageIndex) {
+function renderPageIntoSlot(pageIndex, options = {}) {
   if (!doc || pageIndex < 0 || pageIndex >= pageCount) return false;
   const slot = getPageSlot(pageIndex);
   if (!slot) return false;
   if (slot.dataset.rendered === '1') {
     touchRenderedSlot(pageIndex);
+    if (!options.skipHighlight) renderSearchHighlights({ skipEnsureRendered: true });
     return true;
   }
   try {
@@ -1072,6 +1106,7 @@ function renderPageIntoSlot(pageIndex) {
     touchRenderedSlot(pageIndex);
     updatePageSlotHeights();
     lastRenderedPage = pageIndex;
+    if (!options.skipHighlight) renderSearchHighlights({ skipEnsureRendered: true });
     return true;
   } catch (error) {
     console.error(error);
