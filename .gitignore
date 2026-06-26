@@ -12,6 +12,15 @@ Thumbs.db
 .env.*
 !.env.example
 
+# Non-public local documents / media / archives
+*.hwp
+*.hwpx
+*.pdf
+*.zip
+*.png
+*.jpg
+.env*
+
 # Python cache in case helper scripts are added later
 __pycache__/
 *.pyc
