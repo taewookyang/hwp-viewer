@@ -125,7 +125,7 @@ function setLoading(on, message = '문서를 여는 중…') {
 
 function updateDebugPanel() {
   if (!els.debugPanel || !els.debugWrap) return;
-  if (!DEBUG_SEARCH || !currentFile) {
+  if (!currentFile) {
     els.debugWrap.hidden = true;
     els.debugPanel.hidden = true;
     return;
@@ -1307,6 +1307,7 @@ async function openFile(file) {
     els.viewerWrap.scrollTop = 0;
     await nextPaint();
     syncCurrentPageFromViewport();
+    updateDebugPanel();
   } catch (error) {
     console.error(error);
     cleanupDocument();
@@ -1406,7 +1407,7 @@ function registerEvents() {
 function registerServiceWorker() {
   if (!('serviceWorker' in navigator)) return;
   window.addEventListener('load', () => {
-    navigator.serviceWorker.register('./sw.js?v=24');
+    navigator.serviceWorker.register('./sw.js?v=25');
   });
 }
 
