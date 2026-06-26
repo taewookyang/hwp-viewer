@@ -66,6 +66,7 @@ let searchDebounceTimer = null;
 let touchStartX = null;
 let touchStartY = null;
 let errorTimer = null;
+let lastRenderedPage = null;
 const pageTextLayoutCache = new Map();
 let debugState = {
   query: '',
@@ -186,6 +187,7 @@ function cleanupDocument() {
   }
   doc = null;
   currentFile = null;
+  lastRenderedPage = null;
   pageTextLayoutCache.clear();
 }
 
@@ -471,8 +473,6 @@ function moveSearch(delta) {
   updateDebugPanel();
   if (Number.isFinite(current?.pageIndex)) {
     goToPage(current.pageIndex + 1);
-  } else {
-    renderCurrentPage();
   }
 }
 
@@ -937,7 +937,7 @@ function updatePager() {
 }
 
 function renderCurrentPage() {
-  if (!doc || pageCount < 1) return;
+  if (!doc || pageCount < 1) return false;
   try {
     const svgText = doc.renderPageSvg(currentPage);
     const safeSvg = sanitizeSvg(svgText);
@@ -945,9 +945,12 @@ function renderCurrentPage() {
     renderSearchHighlights();
     updatePager();
     els.viewerWrap.scrollTop = 0;
+    lastRenderedPage = currentPage;
+    return true;
   } catch (error) {
     console.error(error);
     showError('페이지를 안전하게 표시하지 못했습니다.');
+    return false;
   }
 }
 
@@ -1003,7 +1006,7 @@ async function openFile(file) {
 
     setLoading(true, '첫 페이지를 그리는 중…');
     await nextPaint();
-    renderCurrentPage();
+    goToPage(1);
   } catch (error) {
     console.error(error);
     cleanupDocument();
@@ -1020,10 +1023,17 @@ async function openFile(file) {
 }
 
 function goToPage(pageNumber) {
-  if (!pageCount) return;
-  const nextPage = Math.max(1, Math.min(pageCount, pageNumber));
-  currentPage = nextPage - 1;
-  renderCurrentPage();
+  if (!pageCount) return false;
+  const requestedPage = Number(pageNumber);
+  if (!Number.isFinite(requestedPage)) return false;
+  const nextPage = Math.max(1, Math.min(pageCount, Math.trunc(requestedPage)));
+  const nextIndex = nextPage - 1;
+  if (nextIndex === currentPage && lastRenderedPage === currentPage) {
+    updatePager();
+    return false;
+  }
+  currentPage = nextIndex;
+  return renderCurrentPage();
 }
 
 function handlePageInputCommit() {
@@ -1052,19 +1062,9 @@ function registerEvents() {
     event.target.value = '';
   });
 
-  els.prevBtn.addEventListener('click', () => {
-    if (currentPage > 0) {
-      currentPage -= 1;
-      renderCurrentPage();
-    }
-  });
+  els.prevBtn.addEventListener('click', () => goToPage(currentPage));
 
-  els.nextBtn.addEventListener('click', () => {
-    if (currentPage < pageCount - 1) {
-      currentPage += 1;
-      renderCurrentPage();
-    }
-  });
+  els.nextBtn.addEventListener('click', () => goToPage(currentPage + 2));
 
   els.pageInput.addEventListener('keydown', (event) => {
     if (event.key === 'Enter') {
@@ -1094,9 +1094,6 @@ function registerEvents() {
     copyDebugPayload();
   });
 
-  els.prevBtn.addEventListener('click', () => goToPage(currentPage));
-  els.nextBtn.addEventListener('click', () => goToPage(currentPage + 2));
-
   els.viewerWrap.addEventListener('touchstart', (event) => {
     touchStartX = event.touches[0]?.clientX ?? null;
     touchStartY = event.touches[0]?.clientY ?? null;
@@ -1111,11 +1108,9 @@ function registerEvents() {
     const dy = endY - touchStartY;
     if (Math.abs(dx) > 60 && Math.abs(dx) > Math.abs(dy) * 1.2) {
       if (dx < 0 && currentPage < pageCount - 1) {
-        currentPage += 1;
-        renderCurrentPage();
+        goToPage(currentPage + 2);
       } else if (dx > 0 && currentPage > 0) {
-        currentPage -= 1;
-        renderCurrentPage();
+        goToPage(currentPage);
       }
     }
     touchStartX = null;
